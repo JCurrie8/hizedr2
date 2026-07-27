@@ -23,6 +23,9 @@ importers:
       '@hized/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@hized/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@hized/ui':
         specifier: workspace:*
         version: link:../../packages/ui
