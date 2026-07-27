@@ -9,7 +9,7 @@ Currently in **Phase 0** (tenancy, auth, organisation hierarchy, environments, C
 
 ## Stack
 
-Next.js (App Router, TypeScript) + Supabase (Postgres, Auth, Storage) + Vercel, in a pnpm/Turborepo monorepo.
+Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth + Cloudflare R2 (storage) + Resend (email) + Vercel, in a pnpm/Turborepo monorepo. Tenant isolation is enforced by Postgres RLS via a session variable (`app.current_user_id`), not a vendor-specific JWT helper.
 
 ## Development
 
@@ -24,7 +24,7 @@ pnpm --filter @hized/web dev
 /apps/web            Next.js application
 /packages/ui          design tokens (Hized brand palette/type) + Tailwind theme
 /packages/contracts    shared TS/zod types across app and future worker
-/packages/testing      Supabase test-client factory, fixtures, RLS test harness
-/supabase              Supabase CLI project (migrations, config, seed data)
+/packages/testing      Neon test-database client factory, fixtures, RLS test harness
+/db                    Postgres migrations and seed data (plain SQL)
 /docs                  architecture notes, runbooks, product docs
 ```
