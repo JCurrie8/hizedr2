@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "@hized/ui/theme.css";
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-text);
+}

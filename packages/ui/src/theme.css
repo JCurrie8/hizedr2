@@ -1,0 +1,24 @@
+/*
+ * Hized Tailwind v4 theme — mirrors packages/ui/src/tokens.ts.
+ * Import this from the app's globals.css: @import "@hized/ui/theme.css";
+ */
+@theme {
+  --color-ink: #0A1F33;
+  --color-navy: #0F2A43;
+  --color-navy-2: #123350;
+  --color-teal: #17A2A6;
+  --color-teal-deep: #0E7C80;
+  --color-canvas: #F4F7F8;
+  --color-panel: #FFFFFF;
+  --color-line: #DCE4E7;
+  --color-muted: #5B6B76;
+  --color-text: #12242F;
+  --color-success: #1E9E6A;
+  --color-warning: #E0A423;
+  --color-danger: #D64545;
+  --color-mist: #8FA8B6;
+
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), monospace;
+}
