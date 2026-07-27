@@ -22,6 +22,11 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export const auth = betterAuth({
   database: pool,
+  // Every tenant is a different subdomain/origin by design (see the
+  // Phase 0 plan's tenant-resolution section) — Better Auth's default
+  // origin check only trusts a single baseURL, so it rejects every
+  // tenant subdomain's requests without this.
+  trustedOrigins: ["*.localhost:3001", "*.hized.app", "localhost:3001", "hized.app"],
   emailAndPassword: {
     enabled: true,
   },
@@ -31,6 +36,26 @@ export const auth = betterAuth({
   advanced: {
     database: {
       generateId: () => crypto.randomUUID(),
+    },
+    // A session must work across tenant subdomains (a Hized consultant
+    // moving between two client tenants, or just this user checking a
+    // tenant they're not a member of) — per-tenant ACCESS is enforced by
+    // getAuthContext()'s membership check, not by cookie scope. Without
+    // this, the cookie is siloed per-subdomain and every cross-subdomain
+    // request just looks unauthenticated instead of correctly "forbidden".
+    //
+    // Deliberately NOT enabled for a bare "localhost" domain: Chromium
+    // rejects/won't persist a cookie with Domain=.localhost at all
+    // (treats it like a public suffix — confirmed by testing, it broke
+    // login even on a single subdomain, not just cross-subdomain
+    // sharing). Real registrable domains (.hized.app in staging/prod)
+    // don't have this problem, so this only degrades local dev, where
+    // per-subdomain sessions are a UX inconvenience, not a security gap —
+    // getAuthContext's membership check is still what actually enforces
+    // tenant isolation either way.
+    crossSubDomainCookies: {
+      enabled: Boolean(process.env.COOKIE_DOMAIN) && !process.env.COOKIE_DOMAIN?.endsWith("localhost"),
+      domain: process.env.COOKIE_DOMAIN,
     },
   },
   databaseHooks: {

@@ -1,9 +1,7 @@
-import { Pool } from "@neondatabase/serverless";
 import type { AppRole } from "@hized/contracts";
+import { dbPool as pool } from "../../db-pool";
 import { auth } from "../identity/auth";
 import { writeAuditLog } from "./audit";
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export interface TenantAuthContext {
   kind: "tenant";
