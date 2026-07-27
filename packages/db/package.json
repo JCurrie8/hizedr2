@@ -1,0 +1,16 @@
+{
+  "name": "@hized/db",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

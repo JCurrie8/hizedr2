@@ -1,0 +1,75 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { withUserContext } from "@hized/db";
+import { getAdminPool, createTenantWithUser, cleanupFixture, type TenantFixture } from "./fixtures";
+
+/**
+ * Proves Postgres RLS actually enforces tenant isolation for the app's
+ * restricted app_user connection (see db/setup-app-role.mjs) — not just
+ * that policies exist syntactically. Requires MIGRATIONS_DATABASE_URL and
+ * DATABASE_URL to point at a real (dev/CI) Neon branch.
+ */
+describe("RLS tenant isolation", () => {
+  const admin = getAdminPool();
+  let tenantA: TenantFixture;
+  let tenantB: TenantFixture;
+
+  beforeAll(async () => {
+    tenantA = await createTenantWithUser(admin, {
+      slug: `rls-test-a-${Date.now()}`,
+      name: "RLS Test A",
+      email: `rls-a-${Date.now()}@test.local`,
+    });
+    tenantB = await createTenantWithUser(admin, {
+      slug: `rls-test-b-${Date.now()}`,
+      name: "RLS Test B",
+      email: `rls-b-${Date.now()}@test.local`,
+    });
+  });
+
+  afterAll(async () => {
+    await cleanupFixture(admin, tenantA);
+    await cleanupFixture(admin, tenantB);
+    await admin.end();
+  });
+
+  it("a tenant member sees exactly their own tenant", async () => {
+    const rows = await withUserContext(tenantA.profileId, (c) =>
+      c.query("select id from public.tenants").then((r) => r.rows),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(tenantA.tenantId);
+  });
+
+  it("cannot SELECT another tenant's row by id", async () => {
+    const rows = await withUserContext(tenantA.profileId, (c) =>
+      c.query("select id from public.tenants where id = $1", [tenantB.tenantId]).then((r) => r.rows),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it("UPDATE against another tenant's row affects zero rows, not an error", async () => {
+    const rowCount = await withUserContext(tenantA.profileId, (c) =>
+      c
+        .query("update public.tenants set name = 'hacked' where id = $1", [tenantB.tenantId])
+        .then((r) => r.rowCount),
+    );
+    expect(rowCount).toBe(0);
+
+    const { rows } = await admin.query("select name from public.tenants where id = $1", [tenantB.tenantId]);
+    expect(rows[0].name).toBe("RLS Test B");
+  });
+
+  it("fails closed: no session variable set means zero rows, not all rows", async () => {
+    const rows = await withUserContext(null, (c) =>
+      c.query("select id from public.tenants").then((r) => r.rows),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it("cross-tenant membership listing is isolated", async () => {
+    const rows = await withUserContext(tenantA.profileId, (c) =>
+      c.query("select tenant_id from public.tenant_memberships").then((r) => r.rows),
+    );
+    expect(rows.every((r) => r.tenant_id === tenantA.tenantId)).toBe(true);
+  });
+});

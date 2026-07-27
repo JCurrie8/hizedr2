@@ -4,4 +4,12 @@
  * thin package so app + worker code can share validated shapes without
  * duplicating them.
  */
-export {};
+
+/** Mirrors the public.app_role Postgres enum (db/migrations/0002_core_schema.sql). */
+export type AppRole =
+  | "company_admin"
+  | "executive"
+  | "functional_leader"
+  | "manager"
+  | "employee"
+  | "analyst";
