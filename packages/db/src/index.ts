@@ -16,27 +16,45 @@ function getPool(): Pool {
   return pool;
 }
 
+export interface UserContext {
+  /** The caller's public.profiles.id — null only for proving the fail-closed case in tests. */
+  userId: string | null;
+  /**
+   * The tenant this specific request is scoped to. Required for any query
+   * touching a tenant-isolated table (see db/migrations/0003_rls.sql,
+   * 0005_explicit_tenant_context.sql) — current_tenant_id() reads this
+   * exact value, it does NOT derive "the" tenant from the user's
+   * memberships, because a user (e.g. Hized consultancy staff) can belong
+   * to more than one tenant. Omit only for genuinely tenant-agnostic
+   * queries (e.g. "which tenants am I a member of").
+   */
+  tenantId?: string | null;
+}
+
 /**
- * Runs `fn` inside a transaction with `app.current_user_id` set via
- * set_config(..., true) (transaction-local), which the RLS policies in
- * db/migrations/0003_rls.sql read via current_user_id(). Every
- * authenticated DB access in the app must go through this — a query run
- * outside it sees no session variable, and current_user_id() returns
- * null, which every policy resolves to "no access" (fails closed).
+ * Runs `fn` inside a transaction with `app.current_user_id` and (if given)
+ * `app.current_tenant_id` set via set_config(..., true) — transaction-
+ * local, read by the RLS policies via current_user_id()/current_tenant_id().
+ * Every authenticated DB access in the app must go through this — a query
+ * run outside it, or with tenantId omitted, sees no tenant context, and
+ * every tenant-scoped policy resolves to "no access" (fails closed).
  *
- * Pass `userId: null` deliberately for genuinely unauthenticated access
- * (there is none in Phase 0 — everything is behind auth) or to prove the
- * fail-closed case in tests.
+ * The caller (getAuthContext(), see apps/web/src/server/domains/access-control)
+ * is responsible for having already validated that userId actually has an
+ * active membership in tenantId — this function trusts whatever it's given.
  */
 export async function withUserContext<T>(
-  userId: string | null,
+  ctx: UserContext,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await getPool().connect();
   try {
     await client.query("begin");
-    if (userId) {
-      await client.query("select set_config('app.current_user_id', $1, true)", [userId]);
+    if (ctx.userId) {
+      await client.query("select set_config('app.current_user_id', $1, true)", [ctx.userId]);
+    }
+    if (ctx.tenantId) {
+      await client.query("select set_config('app.current_tenant_id', $1, true)", [ctx.tenantId]);
     }
     const result = await fn(client);
     await client.query("commit");
