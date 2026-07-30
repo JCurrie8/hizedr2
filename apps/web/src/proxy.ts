@@ -23,7 +23,7 @@ function parseHost(host: string): { kind: "apex" | "admin" | "tenant"; slug: str
   if (hostname.endsWith(".vercel.app")) return { kind: "apex", slug: null };
 
   const parts = hostname.split(".");
-  if (parts.length <= 2) return { kind: "apex", slug: null }; // e.g. hized.app itself
+  if (parts.length <= 2) return { kind: "apex", slug: null }; // e.g. hized.com itself
   const label = parts[0] ?? "";
   return label === "admin" ? { kind: "admin", slug: null } : { kind: "tenant", slug: label };
 }
