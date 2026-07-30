@@ -19,13 +19,18 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.1 |
+| Document status | Build-ready product definition — Version 1.2 |
 
 ### Changes since v1.0
 
 - **Hized Field removed.** Travel/route-optimisation was speculative and not represented anywhere in the go-to-market material; it added scope without a validated buyer.
 - **Hized Canvas added.** The self-serve, build-your-own-dashboard layer on top of Pulse's governed data — already live in the marketing site's four-pillar story (Connect · Pulse · Canvas · Compass) — is now a first-class product in this spec.
-- **Reference architecture updated (section 8.1).** The platform will be built on Next.js + Supabase (Postgres, Auth, Storage, Row-Level Security) rather than the ASP.NET Core / Azure SQL / Microsoft Entra ID stack originally proposed, to match available tooling and move faster pre-pilot. Section 12.4 records this as a resolved decision.
+- **Reference architecture updated (section 9.1).** The platform will be built on Next.js with a tenant-isolated Postgres database (Row-Level Security keyed on TenantId), rather than the ASP.NET Core / Azure SQL / Microsoft Entra ID stack originally proposed, to move faster pre-pilot.
+
+### Changes since v1.1
+
+- **Section 7, Hized Platform Administration, added.** Previously the Platform Super Admin persona was named once (section 3.2, "manage tenants, platform configuration, support access and system health") with no functional-scope section of its own — unlike Pulse, Connect and Canvas, which each get one. It now does.
+- **Reference architecture (section 9.1) corrected to Neon + Better Auth + Cloudflare R2.** V1.1 specified Supabase (Postgres + Auth + Storage bundled). The build moved to Neon (Postgres) once in progress — free tier, database branching included free — which has no bundled Auth or Storage, so those became independent choices: Better Auth (self-hosted on the same Postgres, no per-user vendor cost) and Cloudflare R2 (zero egress fees). Tenant isolation is still Postgres Row-Level Security keyed on TenantId; the session mechanism that feeds it changed from Supabase's `auth.uid()` to an application-set session variable, since Neon has no equivalent built in.
 
 ## 1. Product definition and positioning
 
@@ -104,7 +109,7 @@ The organisational hierarchy is a first-class data structure. Dashboards must no
 
 | Module | Primary users | Core outcomes | Illustrative KPIs |
 |---|---|---|---|
-| Platform Super Admin | Hized internal team | Manage tenants, platform configuration, support access and system health | Tenant count, connector health, usage |
+| Platform Super Admin | Hized internal team | Manage tenants, platform configuration, support access and system health — see section 7 | Tenant count, connector health, usage |
 | Company Admin | Client data/IT owner | Manage users, roles, hierarchy, branding, connectors and KPI catalogue | Refresh status, adoption, access reviews |
 | Executive | Board and senior leadership | Understand company health, strategic targets, risks and exceptions | Revenue, profit, cash, customer, workforce, delivery |
 | Functional Leader | Head of department or region | Manage performance, capacity and root causes within a defined scope | Department outcomes, teams, forecasts, risks |
@@ -258,9 +263,46 @@ Where Pulse is the governed backbone — curated templates, approved KPIs, role-
 
 Canvas trades control for speed by design — that is its value. The non-negotiable constraint is that every board it produces is composed from the same governed, tenant-scoped datasets Pulse uses. Canvas can visualise and locally calculate; it must never let a user silently redefine or fork an approved KPI's meaning. The only way a Canvas calculation becomes an organisation-wide number is explicit promotion into the governed catalogue (CANVAS-005).
 
-## 7. Data model and KPI governance
+## 7. Hized Platform Administration
 
-### 7.1 Core platform entities
+### 7.1 Product intent
+
+Company Admin (section 3.2) manages one tenant, from inside it. Platform Super Admin is Hized's own internal team operating the entire multi-tenant estate from outside every tenant — provisioning new clients, watching cross-tenant health, and providing support without that support becoming an unaudited backdoor into client data. This is never sold to clients; it is how Hized runs the platform, and its own credibility depends on the audit guarantee in section 7.4 being real, not aspirational.
+
+### 7.2 Core capabilities
+
+- Tenant lifecycle: create, configure, suspend and offboard tenants.
+- A cross-tenant list view: every tenant, its status, plan/tier and basic health at a glance — the "one screen" a platform admin starts a day from.
+- Cross-tenant support access, scoped and time-boxed, with every view or action logged distinguishably from ordinary tenant activity.
+- System-wide operational health once Hized Connect exists: aggregated pipeline failures, stale data and error rates across all tenants, so Hized catches a problem before the client reports it.
+- Usage and adoption visibility per tenant (active users, Pulse vs Canvas usage) to support account management and renewal conversations.
+- Platform-level configuration: feature flags that can be scoped to specific tenants (e.g. early access to a new capability) without a deployment.
+
+### 7.3 Requirements
+
+| ID | Requirement | Priority | Acceptance signal |
+|---|---|---|---|
+| PLATFORM-001 | Create and configure a new tenant (name, slug, branding, time zone) without code changes. | Must | A platform admin provisions a tenant end to end through the UI. |
+| PLATFORM-002 | View a list of all tenants with status, creation date and basic health indicators. | Must | The tenant list loads and reflects current state, not a stale snapshot. |
+| PLATFORM-003 | Every cross-tenant view or action by a platform admin is written to an immutable audit log, distinguishable from ordinary tenant-scoped activity. | Must | An auditor can see exactly which tenants a given platform admin accessed, when, and what they did. |
+| PLATFORM-004 | Suspend or offboard a tenant, including the data retention/deletion workflow required by section 8.3. | Should | A suspended tenant's users cannot sign in; an offboarded tenant's data follows the retention policy, not ad hoc deletion. |
+| PLATFORM-005 | Aggregate cross-tenant operational health (pipeline failures, stale data, error rates) once Hized Connect exists. | Should | A platform admin sees which tenants have active data-quality warnings without visiting each tenant individually. |
+| PLATFORM-006 | "View as" a specific tenant or role for support troubleshooting, fully audited and time-boxed. | Could | A support session records actor, target tenant/user, start and end time, and cannot silently outlast a defined window. |
+| PLATFORM-007 | Manage feature flags scoped to specific tenants. | Could | A flag change takes effect for the intended tenant(s) without a deployment. |
+
+### 7.4 Governance guardrail
+
+Platform Super Admin's reach is the single most powerful access level in the system — it is also the one clients have to trust blindly, since they can't see it working. Every RLS policy branch that grants a platform admin cross-tenant access (see section 9.2) must have a corresponding audit-log write; there is no "quiet" bypass path. PLATFORM-006 ("view as") is explicitly the highest-risk capability here and should not be built casually — it needs its own time-boxing and audit design before it ships, not just a role check.
+
+### 7.5 Explicitly out of scope for MVP
+
+- Billing and invoicing UI (handled outside the product initially).
+- PLATFORM-006 ("view as" impersonation) until there is a validated support need for it.
+- PLATFORM-005 (cross-tenant health aggregation) until Hized Connect exists — there is nothing to aggregate before then.
+
+## 8. Data model and KPI governance
+
+### 8.1 Core platform entities
 
 | Module | Primary users | Core outcomes | Illustrative KPIs |
 |---|---|---|---|
@@ -278,7 +320,7 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 | Alert / Notification | Exception management | Rule, event, recipient, acknowledgement and status | AlertRuleId, AlertEventId |
 | Comment / Action | Performance follow-up | Narrative, owner, due date, status and evidence | ActionId |
 
-### 7.2 Semantic layer rules
+### 8.2 Semantic layer rules
 
 - Business definitions are separated from visual configuration.
 - All fact records must carry TenantId and sufficient organisation keys for security and aggregation.
@@ -289,7 +331,7 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 - KPI versions must be traceable so a changed definition does not silently rewrite approved historical reports.
 - Hized Canvas may compose new visual layouts and locally scoped calculated fields from governed datasets, but must never redefine an approved KPI definition without going through promotion (section 6.3, CANVAS-005).
 
-### 7.3 Example KPI contract
+### 8.3 Example KPI contract
 
 | | |
 |---|---|
@@ -304,35 +346,35 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 | Thresholds | Green >= 92%; amber 88%–91.99%; red < 88% |
 | Security | Employee sees own value; managers see assigned hierarchy; executives see all. |
 
-## 8. Reference architecture and security
+## 9. Reference architecture and security
 
-### 8.1 Recommended implementation stack
+### 9.1 Recommended implementation stack
 
 | | |
 |---|---|
 | Web application | Next.js with React and TypeScript; responsive component library; server-rendered authenticated shell. |
 | Backend API | Next.js Route Handlers / Server Actions as the application layer, organised into clear domain modules for the MVP rather than a separate service. |
-| Operational database | Supabase Postgres for tenants, users, metadata, configuration, audit and workflow state, with tenant isolation enforced by Row-Level Security policies keyed on TenantId. |
-| Analytical storage | Supabase Postgres (curated schemas) initially; architecture should permit a dedicated warehouse (e.g. Snowflake, BigQuery, ClickHouse) later as volume grows. |
-| Background processing | Supabase Edge Functions and/or scheduled workers for connectors, transformations, scheduled jobs and notifications. |
+| Operational database | Neon Postgres for tenants, users, metadata, configuration, audit and workflow state, with tenant isolation enforced by Row-Level Security policies keyed on TenantId. |
+| Analytical storage | Neon Postgres (curated schemas) initially; architecture should permit a dedicated warehouse (e.g. Snowflake, BigQuery, ClickHouse) later as volume grows. |
+| Background processing | Scheduled workers/background jobs for connectors, transformations, scheduled jobs and notifications. |
 | Cache / queue | A managed queue for asynchronous jobs and notifications; add a cache layer only once performance requires it. |
-| Object storage | Supabase Storage for source files, exports and report artefacts. |
-| Authentication | Supabase Auth (email/password, magic link, OAuth) for the MVP; SSO/Entra federation added for enterprise tenants that require it. |
-| Deployment | Vercel for the web application; Supabase-managed infrastructure for database, auth, storage and functions; separate development, staging and production environments with automated CI/CD. |
-| Observability | Supabase logs/metrics plus structured logging and error tracking (e.g. Sentry) integrated into the Next.js app and edge functions. |
+| Object storage | Cloudflare R2 (S3-compatible, zero egress fees) for source files, exports and report artefacts. |
+| Authentication | Better Auth (email/password, magic link, OAuth), self-hosted on the same Neon database, for the MVP; SSO/Entra federation added as a paid connector for enterprise tenants that require it. |
+| Deployment | Vercel for the web application; Neon-managed database branching for environments; separate development, staging and production environments with automated CI/CD. |
+| Observability | Structured logging and error tracking (e.g. Sentry) integrated into the Next.js app and background workers. |
 
-**Architecture choice:** Use a modular monolith first. Preserve boundaries for Identity, Tenancy, Organisation, Connectors, Pipelines, Semantic Metrics, Dashboards, Canvas and Alerts as clear code-level domains within the Next.js app, but avoid premature microservices.
+**Architecture choice:** Use a modular monolith first. Preserve boundaries for Identity, Tenancy, Organisation, Connectors, Pipelines, Semantic Metrics, Dashboards, Canvas, Alerts and Platform Administration as clear code-level domains within the Next.js app, but avoid premature microservices.
 
-### 8.2 Multi-tenancy
+### 9.2 Multi-tenancy
 
 - Every request and persisted record is tenant-scoped.
-- Tenant isolation is enforced primarily through Postgres Row-Level Security policies keyed on TenantId, not solely through application-layer checks.
-- For early clients, use a shared application with strong logical isolation; support dedicated infrastructure (a separate Supabase project) as an enterprise option.
+- Tenant isolation is enforced primarily through Postgres Row-Level Security policies keyed on TenantId, not solely through application-layer checks. The session context those policies read is set by trusted server-side code once per request, immediately after verifying the caller's identity — not derived from anything client-supplied.
+- For early clients, use a shared application with strong logical isolation; support dedicated infrastructure (a separate database) as an enterprise option.
 - No client can enumerate or infer another tenant's users, data, identifiers, exports or logs.
 - Support tenant-specific branding, time zone, financial calendar, retention, data residency and feature flags.
 - Create automated tests specifically designed to detect cross-tenant access failures.
 
-### 8.3 Security requirements
+### 9.3 Security requirements
 
 - Encryption in transit and at rest.
 - Secrets stored in a managed secret vault, never application configuration or logs.
@@ -344,7 +386,7 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 - Data retention and deletion workflows, including tenant offboarding.
 - Privacy impact assessment for employee-level data.
 
-### 8.4 Non-functional requirements
+### 9.4 Non-functional requirements
 
 | ID | Requirement | Priority | Acceptance signal |
 |---|---|---|---|
@@ -355,9 +397,9 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 | NFR-005 | Configuration changes are versioned and auditable. | Should | An administrator can identify who changed a KPI, dashboard, board or pipeline and when. |
 | NFR-006 | Critical services provide health checks and actionable monitoring. | Must | Support can distinguish application, source, pipeline and data-quality incidents. |
 
-## 9. Core workflows and user stories
+## 10. Core workflows and user stories
 
-### 9.1 Tenant onboarding
+### 10.1 Tenant onboarding
 
 1. Hized creates the tenant and nominates a Company Admin.
 2. The Company Admin configures branding, time zone, financial calendar and authentication.
@@ -370,7 +412,7 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 9. Refresh monitoring, alerts and scheduled reports are activated.
 10. The implementation moves into a managed-service and improvement cycle.
 
-### 9.2 Representative user stories
+### 10.2 Representative user stories
 
 | ID | Requirement | Priority | Acceptance signal |
 |---|---|---|---|
@@ -381,8 +423,9 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 | US-ADMIN-01 | As an administrator, I want to define a KPI once and reuse it across dashboards so that reports remain consistent. | Must | Definition, formula, thresholds, owner and version are stored centrally. |
 | US-DATA-01 | As a data owner, I want failed or stale pipelines to generate actionable alerts so that users do not unknowingly rely on outdated data. | Must | The dashboard displays freshness and pipeline incident status. |
 | US-CANVAS-01 | As an analyst, I want to build my own dashboard from governed datasets without waiting on engineering so that I can answer a one-off question quickly. | Should | The analyst can create, save and share a board using only approved datasets and fields, without altering any governed KPI. |
+| US-PLATADMIN-01 | As a platform admin, I want to provision a new tenant and see its health alongside every other tenant so that I can run Hized's whole client base from one place. | Must | A new tenant is created via the platform admin UI, and immediately appears in the cross-tenant list with the same health indicators as existing tenants. |
 
-### 9.3 Example cross-layer drill journey
+### 10.3 Example cross-layer drill journey
 
 1. Executive sees installation completion below target nationally.
 2. Executive drills to regions and identifies the West region as the main variance.
@@ -391,16 +434,16 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 5. Manager opens the permitted employee and job detail, assigns an action and adds commentary.
 6. The next weekly pack retains the original variance, action owner and updated outcome.
 
-## 10. MVP definition and delivery roadmap
+## 11. MVP definition and delivery roadmap
 
-### 10.1 MVP objective
+### 11.1 MVP objective
 
-**MVP outcome:** A real client can connect SQL Server or upload structured files, define an organisation hierarchy and governed KPIs, publish role-aware dashboards, drill from executive to team/employee level, build their own Canvas boards on the same data, monitor refreshes and receive scheduled exception alerts.
+**MVP outcome:** A real client can connect SQL Server or upload structured files, define an organisation hierarchy and governed KPIs, publish role-aware dashboards, drill from executive to team/employee level, build their own Canvas boards on the same data, monitor refreshes and receive scheduled exception alerts — provisioned and supported by Hized through the Platform Administration surface (section 7), not direct database access.
 
-### 10.2 MVP in scope
+### 11.2 MVP in scope
 
-- Multi-tenant tenant and user administration.
-- Authentication plus role and organisation-scope permissions (Supabase Auth).
+- Multi-tenant tenant and user administration, including platform-admin-driven tenant provisioning (PLATFORM-001/002).
+- Authentication plus role and organisation-scope permissions.
 - Organisation hierarchy with effective dates and employee assignments.
 - SQL Server/Azure SQL connector and CSV/Excel ingestion.
 - Scheduled full and watermark-based incremental pipelines.
@@ -411,9 +454,9 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 - Core visual widgets, filters, drill-down and permitted record detail.
 - In-app and email alerts for KPI thresholds, stale data and failed refreshes.
 - PDF and spreadsheet-compatible scheduled reporting.
-- Branding, audit log, basic support tools and operational monitoring.
+- Branding, audit log (including platform-admin cross-tenant access — PLATFORM-003), basic support tools and operational monitoring.
 
-### 10.3 Explicitly out of scope for MVP
+### 11.3 Explicitly out of scope for MVP
 
 - Large marketplace of packaged SaaS connectors.
 - Full no-code visual transformation canvas for Connect pipeline building *(distinct from the Hized Canvas dashboard product, which is in scope)*.
@@ -421,8 +464,9 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 - Natural-language analytics or autonomous AI decision making.
 - Complex planning, budgeting and write-back workflows.
 - Community marketplace, white-label reseller management and public embedding.
+- Platform-admin "view as" impersonation (PLATFORM-006) and cross-tenant health aggregation (PLATFORM-005) — see section 7.5.
 
-### 10.4 Delivery phases
+### 11.4 Delivery phases
 
 | Module | Primary users | Core outcomes | Illustrative KPIs |
 |---|---|---|---|
@@ -433,13 +477,15 @@ Canvas trades control for speed by design — that is its value. The non-negotia
 | Phase 4 — Operate | Production readiness | Alerts, reports, audit, support screens, backups, performance and accessibility | Pilot-ready managed service |
 | Phase 5 — Expand | After pilot evidence | More connectors, templates, actions, forecasting and employee self-service | Repeatable client implementations |
 
-### 10.5 Suggested pilot
+Platform Administration (section 7) is not its own phase — PLATFORM-001/002/003 (tenant provisioning, tenant list, audit trail) are foundational and belong in Phase 0 alongside tenancy itself; PLATFORM-004 belongs wherever tenant offboarding is first needed; PLATFORM-005/006/007 are explicitly deferred past MVP (section 7.5).
+
+### 11.5 Suggested pilot
 
 Use a field-service, customer-care, logistics, energy, construction or installation business with three to five source systems and a clear management hierarchy. The pilot should include one executive dashboard, one operational function, one team-to-employee drill path, at least one self-serve Canvas board, and at least one automated data-quality alert.
 
-## 11. Acceptance criteria and quality standards
+## 12. Acceptance criteria and quality standards
 
-### 11.1 Product-level acceptance
+### 12.1 Product-level acceptance
 
 1. A tenant administrator can configure a client without developer database edits.
 2. A source can be connected using encrypted credentials and least-privilege access.
@@ -452,8 +498,9 @@ Use a field-service, customer-care, logistics, energy, construction or installat
 9. All privileged configuration changes and sensitive exports appear in the audit log.
 10. The platform can onboard a second tenant without copying or branching application code.
 11. A Canvas board built by one user cannot expose data the viewer isn't otherwise permitted to see.
+12. A platform admin can provision and view every tenant, and every one of those cross-tenant actions is independently visible in the audit log — not just the client-facing audit trail.
 
-### 11.2 Definition of done for each feature
+### 12.2 Definition of done for each feature
 
 - Functional acceptance criteria implemented and tested.
 - Authorisation and cross-tenant tests included.
@@ -464,13 +511,13 @@ Use a field-service, customer-care, logistics, energy, construction or installat
 - Database migration, rollback and seed/demo data supplied.
 - User-facing configuration and administrator notes documented.
 
-### 11.3 Demo data requirement
+### 12.3 Demo data requirement
 
 The codebase should contain a synthetic demonstration tenant representing an installation and service business. It should include regions, teams, employees, jobs, sales, customer service and finance KPIs. Synthetic data must clearly demonstrate target variance, hierarchy drill-down, stale data, an ETL warning and at least one promoted Canvas board.
 
-## 12. AI build handoff prompt and backlog
+## 13. AI build handoff prompt and backlog
 
-### 12.1 Master prompt for an AI software builder
+### 13.1 Master prompt for an AI software builder
 
 > You are the lead product engineer for Hized. Build a production-minded, multi-tenant business performance platform using this specification as the source of truth.
 >
@@ -478,6 +525,8 @@ The codebase should contain a synthetic demonstration tenant representing an ins
 > 1. Hized Connect — connector, ETL, validation, monitoring and curated data layer.
 > 2. Hized Pulse — role-aware dashboards and governed KPI management from executive to employee level.
 > 3. Hized Canvas — self-serve dashboard and board-building layer on the same governed datasets as Pulse; ship a working MVP alongside Pulse, not merely an extension point.
+>
+> Alongside these, **Hized Platform Administration** (section 7) is not a client-facing product but is foundational build scope — it's how Hized itself provisions and supports every tenant, and its audit guarantee (section 7.4) is what makes the multi-tenancy promise in section 9.2 credible rather than aspirational.
 >
 > **Build principles:**
 > - Deliver vertical slices that work end to end.
@@ -492,10 +541,11 @@ The codebase should contain a synthetic demonstration tenant representing an ins
 > **MVP build order:**
 > - A. Repository, environments, design system, authentication and tenancy.
 > - B. Organisation hierarchy, users, roles and row-level scope.
-> - C. SQL Server plus CSV/Excel connectors, pipeline scheduling, run logging and validation.
-> - D. Curated dataset metadata and KPI catalogue.
-> - E. Executive-to-employee dashboards, filters, targets, drill-through and Canvas self-serve board building.
-> - F. Alerts, scheduled reports, audit and production hardening.
+> - C. Platform admin tenant provisioning, cross-tenant list and audit trail (PLATFORM-001/002/003).
+> - D. SQL Server plus CSV/Excel connectors, pipeline scheduling, run logging and validation.
+> - E. Curated dataset metadata and KPI catalogue.
+> - F. Executive-to-employee dashboards, filters, targets, drill-through and Canvas self-serve board building.
+> - G. Alerts, scheduled reports, audit and production hardening.
 >
 > **For each iteration:**
 > - Restate the selected epic and assumptions.
@@ -506,7 +556,7 @@ The codebase should contain a synthetic demonstration tenant representing an ins
 > - Provide run instructions and a concise change log.
 > - Do not start the next epic until the current acceptance criteria pass.
 
-### 12.2 Initial engineering epics
+### 13.2 Initial engineering epics
 
 | ID | Requirement | Priority | Acceptance signal |
 |---|---|---|---|
@@ -522,8 +572,9 @@ The codebase should contain a synthetic demonstration tenant representing an ins
 | EPIC-10 | Alerts, scheduled reports, exports and notification centre. | Should | Threshold and data-freshness events reach selected users. |
 | EPIC-11 | Audit, support tooling, monitoring, backup and pilot hardening. | Must | Operational runbook and recovery checks are complete. |
 | EPIC-12 | Hized Canvas self-serve board builder, local calculated fields and promotion-to-catalogue workflow. | Should | Analysts can build, save and share a board using only governed datasets; a promoted board's calculated field becomes a versioned KPI. |
+| EPIC-13 | Platform Administration: tenant provisioning, cross-tenant list, and platform-admin audit trail distinguishable from tenant-level audit. | Must | A platform admin creates a tenant end to end and every cross-tenant view/action is independently auditable (PLATFORM-001/002/003). |
 
-### 12.3 Repository structure recommendation
+### 13.3 Repository structure recommendation
 
 ```
 /apps
@@ -539,6 +590,7 @@ The codebase should contain a synthetic demonstration tenant representing an ins
   /dashboards
   /canvas
   /alerts
+  /platform-admin
 /packages
   /ui
   /contracts
@@ -552,19 +604,22 @@ The codebase should contain a synthetic demonstration tenant representing an ins
   /product
 ```
 
-### 12.4 Product decisions still requiring validation
+### 13.4 Product decisions still requiring validation
 
 - Exact early-client industry focus and first reusable dashboard template.
-- Shared analytical database versus database-per-tenant options at different commercial tiers (relevant either way under Supabase: shared schema + RLS, or a separate Supabase project per enterprise tenant).
+- Shared analytical database versus database-per-tenant options at different commercial tiers.
 - Whether employee self-service is enabled by default or only where explicitly configured.
 - Whether Canvas board promotion (CANVAS-005) requires Company Admin approval only, or also a Hized-side review during the pilot phase.
 - Level of client self-configuration versus Hized-managed configuration in the first two years.
 - Pricing model: per tenant, per user, per connector, data volume, managed service tier or hybrid.
+- Exact scope and timing of PLATFORM-005 (cross-tenant health aggregation) and PLATFORM-006 ("view as" impersonation) — both explicitly deferred past MVP (section 7.5), but not yet scheduled into a specific phase.
 
-**Resolved since v1.0:** Reference architecture is Next.js + Supabase (Postgres, Auth, Storage, RLS-based tenant isolation) + Vercel, not the ASP.NET Core / Azure SQL / Microsoft Entra ID stack originally proposed in section 8.1.
+**Resolved since v1.0:** Reference architecture is Next.js + a tenant-isolated Postgres database (RLS-based tenant isolation) + Vercel, not the ASP.NET Core / Azure SQL / Microsoft Entra ID stack originally proposed in section 9.1.
+
+**Resolved since v1.1:** The Postgres/Auth/Storage stack is Neon + Better Auth + Cloudflare R2 (section 9.1), not Supabase — changed once the build was in progress; Supabase bundles Auth and Storage with its Postgres offering, Neon does not, so those two became independent choices favouring zero cost until a tenant is paying.
 
 ### Closing product statement
 
-Hized is a consultancy-led data performance platform. Hized Connect creates the trusted data foundation. Hized Pulse turns that foundation into governed, role-aware performance views from executive leadership to individual teams and employees. Hized Canvas lets any authorised user build their own views on that same trusted foundation without waiting on engineering. The immediate product goal is not to build every possible dashboard; it is to prove a secure, repeatable path from fragmented source data to accountable business performance.
+Hized is a consultancy-led data performance platform. Hized Connect creates the trusted data foundation. Hized Pulse turns that foundation into governed, role-aware performance views from executive leadership to individual teams and employees. Hized Canvas lets any authorised user build their own views on that same trusted foundation without waiting on engineering. Hized Platform Administration is how Hized itself provisions, supports and stays accountable for every one of those tenants without becoming the weak point in its own isolation guarantee. The immediate product goal is not to build every possible dashboard; it is to prove a secure, repeatable path from fragmented source data to accountable business performance.
 
 *END OF PRODUCT BLUEPRINT*
