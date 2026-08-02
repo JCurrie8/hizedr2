@@ -59,6 +59,10 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 ## Session Log
 
+### 2026-08-02 — Codex (SharePoint delta reconciliation started)
+
+After releasing PR #4, created `codex/sharepoint-ingestion` from the production merge and started the next Connect source. Added a pure Microsoft Graph drive-delta planner that treats Graph item IDs as authoritative, collapses repeated item appearances to the documented last occurrence, permits checkpoints only on the final `@odata.deltaLink`, retains selected deletion state, limits downloads to the shared CSV/XLSX parser, validates timestamps/sizes, and rejects continuation URLs outside the Microsoft Graph v1.0 origin. Four focused tests and web typecheck pass. Next: Microsoft OAuth/credential encryption, site/drive/item selection, and the server-side delta/download runner that hashes each workbook revision into the existing batch/run pipeline; webhooks remain prompts to reconcile rather than a source of truth.
+
 ### 2026-08-02 — Codex (direct file ingestion + SME/Custom ETL boundary)
 
 Completed the first end-to-end Connect run path. Company admins and analysts can create multiple independent file pipelines, upload bounded CSV/XLSX files directly to private R2 with a short-lived signed PUT, and finalise them through tenant-scoped server actions. R2 retains signed tenant/pipeline/hash metadata; the server verifies metadata, byte length and a recomputed SHA-256 before parsing. Snapshot, append and key-based upsert modes now persist immutable source batches, landed rows, quarantined-key validations, curated records, step status, row counts and audited completion/failure events. Unchanged file revisions are idempotent and redundant exact R2 objects are removed. The production bucket CORS policy is reproducible and live preflight tests pass for the Vercel origin and `*.hized.com` tenant origins.
