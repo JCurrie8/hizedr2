@@ -25,16 +25,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.17.0
-
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+
+      - name: Enable the repository pnpm version
+        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -74,16 +71,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.17.0
-
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+
+      - name: Enable the repository pnpm version
+        run: corepack enable
 
       - name: Require an explicitly isolated CI database
         shell: bash
