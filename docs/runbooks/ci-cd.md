@@ -5,7 +5,7 @@ Hized uses GitHub Actions for required verification and the existing Vercel Git 
 ## Provisioned state (2026-08-02)
 
 - Neon branch `ci` is the persistent, disposable database used only by GitHub Actions.
-- `CI_MIGRATIONS_DATABASE_URL`, `CI_DATABASE_URL`, and `CI_DATABASE_SAFE_TO_MUTATE=true` are configured in the GitHub repository.
+- `CI_MIGRATIONS_DATABASE_URL` and `CI_DATABASE_SAFE_TO_MUTATE=true` are configured in the GitHub repository. The rotated restricted-role URL must still be saved as `CI_DATABASE_URL` after GitHub sudo confirmation.
 - Protected-main enforcement is still pending; do not describe the workflow as a required merge gate until both checks are required in repository settings.
 
 ## One-time repository configuration
