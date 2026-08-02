@@ -47,12 +47,17 @@ export async function getTenantLandingContext(requestHeaders: Headers): Promise<
 }
 
 export function tenantEntryUrl(opts: { slug: string; host: string; protocol?: string }): string {
+  return tenantAppUrl({ ...opts, path: "/dashboard" });
+}
+
+export function tenantAppUrl(opts: { slug: string; host: string; protocol?: string; path: string }): string {
   const hostname = opts.host.toLowerCase().split(":")[0] ?? "";
   const protocol = opts.protocol === "http" ? "http" : "https";
+  const path = opts.path.startsWith("/") ? opts.path : `/${opts.path}`;
 
   if (hostname === "hized.com" || hostname.endsWith(".hized.com")) {
-    return `${protocol}://${opts.slug}.hized.com/dashboard`;
+    return `${protocol}://${opts.slug}.hized.com${path}`;
   }
 
-  return `/t/${encodeURIComponent(opts.slug)}/dashboard`;
+  return `/t/${encodeURIComponent(opts.slug)}${path}`;
 }

@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.5 |
+| Document status | Build-ready product definition — Version 1.7 |
 
 ### Changes since v1.0
 
@@ -49,6 +49,14 @@ This specification is designed to be handed to an AI software builder, technical
 ### Changes since v1.4
 
 - **Tenant entry and switching clarified.** After signup or login, an authenticated user is resolved to their active organisation memberships before entering a tenant. A single membership may open directly; multiple memberships require an organisation chooser. Canonical production navigation uses `*.hized.com`; development and preview deployments may use a path-based routing fallback, but both paths must pass the same membership check and RLS context gate.
+
+### Changes since v1.5
+
+- **SharePoint-hosted Excel is a first-class file source.** Hized Connect must monitor selected Excel workbooks or folders in SharePoint Online / OneDrive for Business, including live Microsoft Forms response workbooks that can change several times per day. Ingestion is revision-aware and idempotent: duplicate notifications and retries never duplicate data, while each genuinely changed workbook revision remains traceable to its source item, modification time, Graph version metadata and content hash.
+
+### Changes since v1.6
+
+- **Major CRM sources share a first-class incremental adapter contract.** Salesforce and Zendesk are initial supported CRM adapters, with HubSpot and Dynamics 365 able to use the same discovery, extraction, pagination, checkpoint, retry and deletion contract. Salesforce supports the existing operational pattern of querying new/modified records over a rolling lookback (24 hours by default) and idempotently upserting by record ID, strengthened with a persisted high-water mark so delayed jobs cannot create gaps.
 
 ## 1. Product definition and positioning
 
@@ -227,12 +235,19 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-003 | Support CSV and Excel file ingestion from upload or managed folder. | Must | Files can be mapped, validated and loaded with a repeatable schema. |
 | CONN-004 | Provide a generic REST API connector with pagination, authentication and rate-limit handling. | Should | An administrator can configure a common JSON API without custom code. |
 | CONN-005 | Provide a connector SDK or adapter interface. | Should | New sources can be added without modifying the core orchestration engine. |
+| CONN-006 | Monitor selected Excel files or folders in SharePoint Online / OneDrive for Business, including Microsoft Forms response workbooks. | Must | Multiple workbook updates per day create distinct, traceable source revisions and pipeline runs without duplicate ingestion from retries or repeated notifications. |
+| CONN-007 | Provide first-class Salesforce and Zendesk adapters on a reusable CRM connector contract; allow HubSpot and Dynamics 365 adapters without changing orchestration. | Must | An administrator can discover supported objects/resources, select fields, test access and run an incremental extract through the same pipeline monitoring surface. |
+| CONN-008 | Persist source-specific incremental checkpoints with an optional overlap window and idempotent upsert key. | Must | A delayed, failed or retried CRM run neither misses records nor duplicates previously loaded records; checkpoints advance only after a successful complete run. |
 
 ### 5.3 Pipeline capabilities
 
 - Full and incremental extraction using watermark columns, timestamps, IDs or source change tracking.
+- Salesforce defaults to `SystemModstamp` (or the platform replication fallback where unavailable), a stable record ID upsert key, and a configurable rolling overlap such as the previous 24 hours. Small extracts can use REST pagination; high-volume extracts can use Bulk API 2.0 without changing downstream run semantics.
+- Zendesk uses cursor-based incremental exports where supported, persists the final `after_cursor` only when `end_of_stream` is reached, retains deletion state, and honours endpoint rate-limit / retry headers.
 - Configurable schedules with tenant time zone support.
 - Idempotent loads and safe retry behaviour.
+- SharePoint/OneDrive change tracking uses stable drive/item identifiers and a persisted delta cursor; change notifications may trigger faster reconciliation but never replace the delta scan. Downloaded content is hashed so repeated Graph notifications, retries and metadata-only changes cannot duplicate a load.
+- Cumulative Forms workbooks support a configured stable response key and upsert semantics, so re-reading the latest workbook adds or updates responses rather than appending the full sheet again.
 - Raw landing, staging and curated transformation layers.
 - Data type mapping, column renaming, filtering, joins, calculated fields and deduplication.
 - Validation rules for nulls, uniqueness, ranges, accepted values, referential integrity and row-count variance.
@@ -250,6 +265,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 - Schema comparison and approved drift actions.
 - Rerun, resume, cancel and backfill actions subject to permission.
 - Data freshness and lineage surfaced into Hized Pulse.
+- Source-revision history shows the SharePoint/OneDrive item, source modification time, discovered time, Graph version metadata and content hash used by each run.
 
 **MVP constraint:** Do not attempt to become a full visual data-engineering studio in the first release. Configuration-first pipelines, reusable transformations and excellent observability are more valuable than a complex drag-and-drop canvas *(this refers to Connect's pipeline-building UI, not the Hized Canvas dashboard product below)*.
 
@@ -472,7 +488,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Multi-tenant tenant and user administration, including platform-admin-driven tenant provisioning (PLATFORM-001/002).
 - Authentication plus role and organisation-scope permissions.
 - Organisation hierarchy with effective dates and employee assignments.
-- SQL Server/Azure SQL connector and CSV/Excel ingestion.
+- SQL Server/Azure SQL, Salesforce and Zendesk connectors; manual CSV/Excel ingestion; and monitored SharePoint Online / OneDrive Excel sources including Forms response workbooks. HubSpot and Dynamics 365 use the same adapter contract as follow-on connectors.
 - Scheduled full and watermark-based incremental pipelines.
 - Raw, staging and curated structures with run logs and validation results.
 - KPI catalogue with definitions, targets, thresholds and versions.
@@ -594,7 +610,7 @@ This requirement is delivered progressively by the epic that owns each schema. E
 | EPIC-01 | Platform shell, tenancy, environments and design system. | Must | Two demo tenants are isolated and deployable through CI/CD. |
 | EPIC-02 | Authentication, user management, roles and organisation scopes. | Must | Authorisation tests cover executive, manager and employee journeys. |
 | EPIC-03 | Organisation hierarchy and effective-dated assignments. | Must | Historic and current hierarchy filters return expected results. |
-| EPIC-04 | Connector framework with SQL Server and file connectors. | Must | Connections can be tested and secrets remain protected. |
+| EPIC-04 | Connector framework with SQL Server, file/SharePoint and CRM adapters (Salesforce and Zendesk first). | Must | Connections can be tested, objects/files can be discovered, and secrets remain protected. |
 | EPIC-05 | Pipeline orchestration, incremental extraction, validation and run monitoring. | Must | A failed or warning run is visible and alertable. |
 | EPIC-06 | Dataset metadata and governed KPI catalogue. | Must | A KPI is defined once and reused in multiple dashboards. |
 | EPIC-07 | Dashboard runtime, filter context and core widgets. | Must | A dashboard loads real curated data with responsive states. |

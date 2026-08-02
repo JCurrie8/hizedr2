@@ -15,3 +15,4 @@ export type AppRole =
   | "analyst";
 
 export * from "./org";
+export * from "./connect";

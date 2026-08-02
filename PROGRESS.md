@@ -14,9 +14,9 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 **This repo** (`hized-platform`) is the actual multi-tenant Hized product. It is separate from `hized-web` (the marketing site, github.com/JCurrie8/Hized, deployed to hized.com) — do not confuse the two or edit one expecting it to affect the other.
 
-**Stack**: Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth (self-hosted, no bundled vendor) + Cloudflare R2 (object storage, not yet used by any feature) + Vercel. pnpm + Turborepo monorepo.
+**Stack**: Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth (self-hosted, no bundled vendor) + Cloudflare R2 (object storage; provisioned, upload transfer not wired yet) + Vercel. pnpm + Turborepo monorepo.
 
-**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.5) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
+**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.7) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
 
 **Deployment**:
 - Marketing site → Vercel project `hized` → `hized.com` / `www.hized.com` (live, working, has real email forwarding via MX/TXT records at the registrar — do not touch this domain's DNS carelessly).
@@ -26,15 +26,16 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 - [x] Repo scaffold, Hized design tokens ported into Tailwind
 - [x] Neon + Better Auth + R2 provisioned
-- [x] Core schema & migrations (`db/migrations/`, 14 migrations applied to the current production Neon branch as of 2026-08-02)
+- [x] Core schema & migrations (`db/migrations/`, 14 migrations applied to production; Connect migration `0015` is applied to `vercel-dev` and pending the gated production release as of 2026-08-02)
 - [x] RLS policies + helper functions (`packages/testing/src/rls.test.ts`)
 - [x] Auth integration — invitation signup/acceptance is bound to the single-use token and invited account email, including an existing user joining another tenant; MFA (TOTP) plugin wired server-side but **not yet enforced or given an enrollment UI**
 - [x] Tenant resolution & app shell — subdomain middleware (`apps/web/src/proxy.ts` — Next.js 16 renamed `middleware.ts`; must live under `src/` given this project uses `--src-dir`), authenticated organisation landing/selection, a membership-validated Vercel/localhost path fallback, and login/invite/platform-admin pages
 - [x] Org hierarchy CRUD + drill-down (half-open history, acyclic immediate edits, move cascades ltree paths to descendants, tested; scheduled/backdated mutation is deliberately not exposed yet)
 - [x] Audit logging — writer + both viewer UIs (`/admin/audit`, `/platform-admin/audit`) built; privileged mutations and their events commit atomically, and cross-tenant platform reads are audited before returning
 - [x] CI/CD merge gate — the workflow uses a dedicated Neon `ci` branch with separate owner/runtime secrets and a mutation guard. Protected `main` requires both hosted checks, an up-to-date branch, resolved conversations, and applies the rules to administrators. PR #1 passed and deployed to Vercel production. A gated staging/production schema-release path remains deliberately operator-driven per `docs/runbooks/ci-cd.md`.
-- [~] Demo tenant seeding & EPIC-01 walkthrough — guarded/idempotent seed tooling and two production demo hierarchies exist; restricted-role verification proves 12/6 own nodes and zero cross-tenant nodes. The Northstar signup succeeded and the Harbour invitation exists; releasing the corrected organisation landing route and then verifying both authenticated tenant views remain.
+- [~] Demo tenant seeding & EPIC-01 walkthrough — guarded/idempotent seed tooling and two production demo hierarchies exist; restricted-role verification proves 12/6 own nodes and zero cross-tenant nodes. Northstar login and tenant entry are verified in production after PR #2; accepting the existing Harbour invitation and checking the tenant switch remain.
 - [~] Security hardening & Phase 0 exit review — the 2026-08-02 review findings are fixed and covered by integration tests; the broader exit review remains
+- [~] EPIC-04/05 Connect vertical slice — tenant-scoped connector/pipeline/batch/run/checkpoint schema and RLS tests exist in migration `0015`; the first `/admin/connect` inventory/configuration surface, Salesforce/Zendesk incremental planning contracts, and shared CSV/XLSX parser are built. Next: R2 upload transfer, persisted parsing/validation runs, SharePoint Graph reconciliation, and provider authentication/extraction.
 
 **Known gaps / deliberately deferred (not oversights — don't "fix" without checking why first)**:
 - MFA enrollment UI + enforcement — plugin exists, nothing requires it yet.
@@ -42,7 +43,8 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - Resend/email is skipped entirely — invite links are shown/copied in the admin UI (`/admin/users`), never emailed. This was an explicit user decision to avoid a paid dependency pre-revenue.
 - Blueprint section 7.5: PLATFORM-005 (cross-tenant health aggregation) and PLATFORM-006 ("view as" impersonation) are explicitly out of scope for MVP.
 - CI is an active required merge gate backed by its own persistent Neon `ci` branch. The CI database is intentionally disposable, while staging/production schema releases remain operator-gated; follow `docs/runbooks/ci-cd.md` before introducing a migration.
-- Local owner/runtime URLs now point to the separate Neon `vercel-dev` branch, which has migrations 0001–0014 and its own restricted `app_user`. The production branch is no longer the default target for local integration tests.
+- Local owner/runtime URLs now point to the separate Neon `vercel-dev` branch, which has migrations 0001–0015 and its own restricted `app_user`. The production branch is no longer the default target for local integration tests.
+- The first tabular parser intentionally accepts `.csv` and modern `.xlsx`; legacy binary `.xls`, encrypted workbooks, macros and multi-sheet mapping UI are not silently guessed. SharePoint/Forms and manual upload will use the same parser, with an explicit sheet selection where required.
 
 **RLS notes — read before adding or changing a policy**:
 - Tenant isolation is Postgres RLS, not Supabase's `auth.uid()` (this project isn't on Supabase — see blueprint's "Resolved since v1.1" note). Session context is two Postgres session variables (`app.current_user_id`, `app.current_tenant_id`) set per-transaction by `packages/db`'s `withUserContext()` — every authenticated query must go through it, or RLS sees no context and fails closed (visible as "nothing", not an error).
@@ -56,6 +58,12 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - A fourth isolation weakness was found by the EPIC-01 production verifier: a genuine profile paired by trusted server code with a tenant it did not belong to could read that tenant's `tenant_memberships`, `org_nodes`, and `invitations`, because those SELECT policies trusted `current_tenant_id()` without independently checking active membership. No client-controlled path around `getAuthContext()` was found, but migration `0014` now binds those reads to `current_user_has_tenant_access()` so a future server context-pairing bug fails closed at RLS too.
 
 ## Session Log
+
+### 2026-08-02 — Codex (Connect files + CRM foundation)
+
+Started EPIC-04/05 on branch `codex/connect-file-ingestion`. Updated the blueprint to v1.7: SharePoint/OneDrive Excel and Forms workbooks are revision-aware first-class sources; Salesforce and Zendesk are first-class CRM adapters on a shared checkpoint/batch/run contract, with a persisted high-water mark plus a configurable 24-hour overlap for the existing Salesforce daily-upsert pattern. Added migration `0015_connect_file_pipeline_foundation.sql` and applied it to `vercel-dev`: all Connect relationships use composite tenant foreign keys, a run cannot pair a pipeline and batch from different connectors, unchanged content is deduplicated, CRM tombstones are retained, and one complete RLS predicate per table avoids the permissive-policy OR leak shape. The real restricted-role suite now passes 19 RLS tests, including multi-membership, mismatched-context, employee-denial, deduplication and connector-link attacks.
+
+Built shared validated Salesforce/Zendesk incremental planning contracts, including `SystemModstamp` windows, stable `Id` ordering/upsert semantics, and end-of-stream-only Zendesk cursor commits. Added tenant-safe internal navigation and the first real `/admin/connect` page: connector inventory plus an audited action that creates a manual CSV/XLSX pipeline and checkpoint transactionally. Added a common bounded CSV/XLSX parser for both manual and SharePoint revisions, covering Forms-style rows, sheet selection, dates, formula results and hostile/duplicate headers. Verification passes 35 web tests, 19 RLS tests, contracts/web typecheck, and the Next production build. Next is direct R2 upload/finalisation plus landed/validated/curated run persistence, followed by Graph delta sync and live Salesforce/Zendesk authentication/extraction.
 
 ### 2026-08-02 — Codex (protected production gate + EPIC-01 walkthrough)
 
