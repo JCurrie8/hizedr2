@@ -4,7 +4,11 @@
   "private": true,
   "scripts": {
     "migrate": "node migrate.mjs",
-    "setup-app-role": "node setup-app-role.mjs"
+    "setup-app-role": "node setup-app-role.mjs",
+    "seed-demo": "node seed-demo.mjs",
+    "seed-demo:dry-run": "node seed-demo.mjs --dry-run",
+    "verify-demo": "node verify-demo.mjs",
+    "test": "node --test demo-data.test.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4"

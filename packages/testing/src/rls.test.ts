@@ -134,13 +134,14 @@ describe("RLS tenant isolation", () => {
        order by p.proname`,
       [[
         "accept_invitation_by_token",
+        "current_user_has_tenant_access",
         "current_user_tenant_ids",
         "get_membership_for_slug",
         "get_profile_for_auth_user",
         "has_pending_invitation_by_token",
       ]],
     );
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     expect(rows.every((row) => row.public_execute === false)).toBe(true);
   });
 
@@ -156,6 +157,40 @@ describe("RLS tenant isolation", () => {
       c.query("select tenant_id from public.tenant_memberships").then((r) => r.rows),
     );
     expect(rows).toHaveLength(0);
+  });
+
+  it("a mismatched user and tenant context still fails closed at the RLS boundary", async () => {
+    const marker = `mismatched-context-${Date.now()}`;
+    const { rows: [node] } = await admin.query(
+      "insert into public.org_nodes (tenant_id, node_type, code) values ($1, 'team', $2) returning id",
+      [tenantB.tenantId, marker],
+    );
+    const { rows: [invitation] } = await admin.query(
+      `insert into public.invitations (tenant_id, email, role, token_hash)
+       values ($1, $2, 'employee', encode(digest($2, 'sha256'), 'hex')) returning id`,
+      [tenantB.tenantId, `${marker}@test.local`],
+    );
+    try {
+      const rows = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantB.tenantId },
+        async (c) => {
+          const memberships = await c.query(
+            "select id from public.tenant_memberships where tenant_id = $1",
+            [tenantB.tenantId],
+          );
+          const nodes = await c.query("select id from public.org_nodes where tenant_id = $1", [tenantB.tenantId]);
+          const invitations = await c.query(
+            "select id from public.invitations where tenant_id = $1",
+            [tenantB.tenantId],
+          );
+          return [...memberships.rows, ...nodes.rows, ...invitations.rows];
+        },
+      );
+      expect(rows).toHaveLength(0);
+    } finally {
+      await admin.query("delete from public.invitations where id = $1", [invitation.id]);
+      await admin.query("delete from public.org_nodes where id = $1", [node.id]);
+    }
   });
 
   it("a user with memberships in BOTH tenants only sees the explicitly-scoped one's org data, never both mixed", async () => {

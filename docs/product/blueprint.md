@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.3 |
+| Document status | Build-ready product definition — Version 1.4 |
 
 ### Changes since v1.0
 
@@ -39,6 +39,12 @@ This specification is designed to be handed to an AI software builder, technical
 - **Audit guarantees strengthened.** A privileged mutation and its audit event must commit atomically, and a cross-tenant platform-admin read must not return data unless its corresponding audit event can be written.
 - **Database trust boundary clarified.** Tenant session context cannot exist without a verified user identity; privileged database functions use fixed search paths and explicit role grants rather than PostgreSQL's implicit `PUBLIC` execution.
 - **Delivery safety clarified.** Database integration tests run only against an explicitly dedicated CI database branch, and production deployment follows required CI checks on a protected main branch.
+
+### Changes since v1.3
+
+- **Demo data delivery made progressive.** EPIC-01 seeds two isolated tenant shells and an installation/service organisation hierarchy without inventing schemas for later products. Connect, Pulse and Canvas extend that same synthetic story with jobs and pipeline health, KPIs and target/freshness states, and a promoted board as their owning epics land.
+- **Environment separation made operationally explicit.** Development and CI database-mutating tests must use Neon branches separate from production; a production demo seed is an explicit release operation, not a test fixture.
+- **Tenant context is membership-bound in RLS.** The server still resolves identity and membership before setting session context, but ordinary tenant reads also require that the session user has active access to the selected tenant, so a future server-side context-pairing defect fails closed at the database boundary.
 
 ## 1. Product definition and positioning
 
@@ -531,6 +537,8 @@ Use a field-service, customer-care, logistics, energy, construction or installat
 ### 12.3 Demo data requirement
 
 The codebase should contain a synthetic demonstration tenant representing an installation and service business. It should include regions, teams, employees, jobs, sales, customer service and finance KPIs. Synthetic data must clearly demonstrate target variance, hierarchy drill-down, stale data, an ETL warning and at least one promoted Canvas board.
+
+This requirement is delivered progressively by the epic that owns each schema. EPIC-01 supplies two isolated tenant shells plus the installation/service organisation hierarchy (regions, teams and synthetic employees). EPIC-04/05 add jobs, ingestion and the warning run; EPIC-06/07/08 add governed sales, customer-service and finance KPIs with drill-down, target variance and stale-data states; EPIC-12 adds the promoted Canvas board. Earlier phases must not create placeholder production tables merely to make the final demo appear complete.
 
 ## 13. AI build handoff prompt and backlog
 

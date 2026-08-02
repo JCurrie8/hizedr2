@@ -16,24 +16,24 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 **Stack**: Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth (self-hosted, no bundled vendor) + Cloudflare R2 (object storage, not yet used by any feature) + Vercel. pnpm + Turborepo monorepo.
 
-**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.3) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
+**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.4) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
 
 **Deployment**:
 - Marketing site → Vercel project `hized` → `hized.com` / `www.hized.com` (live, working, has real email forwarding via MX/TXT records at the registrar — do not touch this domain's DNS carelessly).
-- This platform app → Vercel project `hized-platform`, git-linked to this repo, deployed. Wildcard domain `*.hized.com` has been added in Vercel but the nameserver switch at the registrar has **not** happened yet — deliberately paused because it requires recreating the marketing site's MX/SPF records inside Vercel's DNS first, or email forwarding breaks. See git history / ask the user for current status before assuming it's done.
+- This platform app → Vercel project `hized-platform`, git-linked to this repo, production at `https://hized-platform.vercel.app`. Production runtime has the restricted Neon `DATABASE_URL`, `BETTER_AUTH_SECRET`, and canonical `BETTER_AUTH_URL`; `MIGRATIONS_DATABASE_URL` is intentionally not in Vercel. Wildcard domain `*.hized.com` has been added in Vercel but the nameserver switch at the registrar has **not** happened yet — deliberately paused because it requires recreating the marketing site's MX/SPF records inside Vercel's DNS first, or email forwarding breaks. See git history / ask the user for current status before assuming it's done.
 
 **Phase 0 (product foundation) progress** — blueprint section 11.4, this repo's own build sequence:
 
 - [x] Repo scaffold, Hized design tokens ported into Tailwind
 - [x] Neon + Better Auth + R2 provisioned
-- [x] Core schema & migrations (`db/migrations/`, 13 migrations applied to development as of 2026-08-02)
+- [x] Core schema & migrations (`db/migrations/`, 14 migrations applied to the current production Neon branch as of 2026-08-02)
 - [x] RLS policies + helper functions (`packages/testing/src/rls.test.ts`)
 - [x] Auth integration — invitation signup/acceptance is bound to the single-use token and invited account email, including an existing user joining another tenant; MFA (TOTP) plugin wired server-side but **not yet enforced or given an enrollment UI**
 - [x] Tenant resolution & app shell — subdomain middleware (`apps/web/src/proxy.ts` — Next.js 16 renamed `middleware.ts`; must live under `src/` given this project uses `--src-dir`), login/invite/platform-admin pages
 - [x] Org hierarchy CRUD + drill-down (half-open history, acyclic immediate edits, move cascades ltree paths to descendants, tested; scheduled/backdated mutation is deliberately not exposed yet)
 - [x] Audit logging — writer + both viewer UIs (`/admin/audit`, `/platform-admin/audit`) built; privileged mutations and their events commit atomically, and cross-tenant platform reads are audited before returning
 - [~] CI/CD pipeline — workflow and runbook are built; activation still needs a dedicated Neon CI branch, GitHub secrets/guard variable, protected-main required checks, and a gated staging/production migration-release path
-- [ ] Demo tenant seeding & EPIC-01 walkthrough
+- [~] Demo tenant seeding & EPIC-01 walkthrough — guarded/idempotent seed tooling and two production demo hierarchies exist; restricted-role verification proves 12/6 own nodes and zero cross-tenant nodes. Real admin invitations and the interactive browser walkthrough remain.
 - [~] Security hardening & Phase 0 exit review — the 2026-08-02 review findings are fixed and covered by integration tests; the broader exit review remains
 
 **Known gaps / deliberately deferred (not oversights — don't "fix" without checking why first)**:
@@ -42,6 +42,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - Resend/email is skipped entirely — invite links are shown/copied in the admin UI (`/admin/users`), never emailed. This was an explicit user decision to avoid a paid dependency pre-revenue.
 - Blueprint section 7.5: PLATFORM-005 (cross-tenant health aggregation) and PLATFORM-006 ("view as" impersonation) are explicitly out of scope for MVP.
 - CI database infrastructure/repository settings are not provisioned in code: follow `docs/runbooks/ci-cd.md` before treating the GitHub workflow as an active required gate.
+- The currently configured local owner/runtime URLs point to the same Neon branch now used by production. **Do not run the database integration suites against it.** Provision separate development and CI branches first; this is the most immediate environment/CI follow-up.
 
 **RLS notes — read before adding or changing a policy**:
 - Tenant isolation is Postgres RLS, not Supabase's `auth.uid()` (this project isn't on Supabase — see blueprint's "Resolved since v1.1" note). Session context is two Postgres session variables (`app.current_user_id`, `app.current_tenant_id`) set per-transaction by `packages/db`'s `withUserContext()` — every authenticated query must go through it, or RLS sees no context and fails closed (visible as "nothing", not an error).
@@ -52,8 +53,15 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
   - `db/migrations/0011`: `audit_log`'s SELECT policy had the exact same shape as 0006, found by inspection before building the audit viewer UI on top of it — worth checking for this pattern in any table you add a "company_admin can manage their own tenant's X" policy to.
 - Rule of thumb for a new tenant-scoped table's admin-write policy: `tenant_id = current_tenant_id() and (is_company_admin(tenant_id) or is_platform_admin())` — not just the role check alone.
 - Migration `0013` hardens the surrounding database trust boundary: tenant context without a user is rejected in `withUserContext`, audit actors are session-bound, profile security columns are not runtime-updatable, invitation authority is token-bound, and Hized `SECURITY DEFINER` helpers use fixed search paths with no `PUBLIC` execute grant. Preserve those function and column grants in future migrations.
+- A fourth isolation weakness was found by the EPIC-01 production verifier: a genuine profile paired by trusted server code with a tenant it did not belong to could read that tenant's `tenant_memberships`, `org_nodes`, and `invitations`, because those SELECT policies trusted `current_tenant_id()` without independently checking active membership. No client-controlled path around `getAuthContext()` was found, but migration `0014` now binds those reads to `current_user_has_tenant_access()` so a future server context-pairing bug fails closed at RLS too.
 
 ## Session Log
+
+### 2026-08-02 — Codex (GPT-5 production release + EPIC-01 seed)
+
+Released the security-hardening work to `main` and Vercel production after applying migration `0013`, rotating the Neon `app_user` password and Better Auth secret, and configuring production-only Vercel runtime variables. Commit `c975550` reached READY at `https://hized-platform.vercel.app`; its build had no missing-environment warning, the homepage and a short-lived real Neon invitation both returned 200, the probe tenant was deleted, and the deployment had no warning/error/fatal runtime logs.
+
+Started the next task: added guarded, idempotent Phase 0 demo seeding, manifest tests, a restricted-role isolation verifier, and `docs/runbooks/demo-tenants.md`; seeded Northstar Installations and Harbour Field Services into production without any real-person login. The first verifier run uncovered a context/membership gap in three RLS SELECT policies. Added and applied migration `0014_bind_tenant_context_to_membership.sql` plus a regression test; the post-migration verifier now proves each seed principal sees exactly its own tenant and 12/6 own hierarchy nodes with zero cross-tenant rows. Updated the blueprint to v1.4 to make synthetic demo delivery progressive and to forbid development/CI mutation of the production Neon branch. Next: provision separate Neon development/CI branches and GitHub gates, then issue real admin invitations and complete the interactive EPIC-01 walkthrough.
 
 ### 2026-08-02 — Codex (GPT-5 implementation)
 
