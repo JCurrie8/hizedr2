@@ -34,13 +34,16 @@ export function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   if (kind === "tenant" && slug) requestHeaders.set("x-tenant-slug", slug);
 
-  // Only the root path is namespaced under /platform-admin — /login,
-  // /invite/*, /api/auth/* etc. are shared, top-level routes regardless
-  // of which hostname reached them, and must NOT be rewritten (a blanket
-  // rewrite here 404s them, since e.g. no /platform-admin/login exists).
-  if (kind === "admin" && request.nextUrl.pathname === "/") {
+  // Every path under admin.* is namespaced to /platform-admin, EXCEPT the
+  // shared, top-level routes below (/login, /invite/*, /api/auth/*) —
+  // those must resolve the same regardless of which hostname reached
+  // them. Earlier version of this only rewrote the exact root path ("/"),
+  // which meant /platform-admin/audit was unreachable via admin.*/audit;
+  // fixed to a prefix-exclusion instead of an exact-match inclusion.
+  const SHARED_PREFIXES = ["/login", "/invite", "/api"];
+  if (kind === "admin" && !SHARED_PREFIXES.some((p) => request.nextUrl.pathname.startsWith(p))) {
     const url = request.nextUrl.clone();
-    url.pathname = "/platform-admin";
+    url.pathname = `/platform-admin${request.nextUrl.pathname === "/" ? "" : request.nextUrl.pathname}`;
     return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
   }
 

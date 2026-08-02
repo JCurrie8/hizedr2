@@ -21,6 +21,7 @@ describe("invite-gated signup", () => {
   });
 
   afterAll(async () => {
+    await admin.query("delete from public.audit_log where tenant_id = $1", [tenantId]);
     await admin.query("delete from public.tenant_memberships where tenant_id = $1", [tenantId]);
     await admin.query("delete from public.invitations where tenant_id = $1", [tenantId]);
     await admin.query("delete from public.tenants where id = $1", [tenantId]);
@@ -71,5 +72,12 @@ describe("invite-gated signup", () => {
       [tenantId, email],
     );
     expect(invitationRows[0].status).toBe("accepted");
+
+    const { rows: auditRows } = await admin.query(
+      "select action, actor_user_id from public.audit_log where tenant_id = $1 and action = 'invitation.accepted'",
+      [tenantId],
+    );
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].actor_user_id).toBe(profileRows[0].id);
   });
 });

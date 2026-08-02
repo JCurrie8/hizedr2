@@ -114,4 +114,42 @@ describe("RLS tenant isolation", () => {
       ]);
     }
   });
+
+  it("a company_admin of multiple tenants only sees the current tenant's audit log, never both mixed", async () => {
+    // Same regression class as the test above, but for audit_log
+    // specifically (0011) — the single most sensitive table in the
+    // schema, so worth its own explicit case rather than assuming the
+    // fix generalizes.
+    await admin.query(
+      "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'company_admin', 'active')",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    const { rows: [logA] } = await admin.query(
+      "insert into public.audit_log (tenant_id, actor_user_id, action) values ($1, $2, 'test.event') returning id",
+      [tenantA.tenantId, tenantA.profileId],
+    );
+    const { rows: [logB] } = await admin.query(
+      "insert into public.audit_log (tenant_id, actor_user_id, action) values ($1, $2, 'test.event') returning id",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    try {
+      const rowsScopedToA = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (c) => c.query("select tenant_id from public.audit_log where action = 'test.event'").then((r) => r.rows),
+      );
+      expect(rowsScopedToA.every((r) => r.tenant_id === tenantA.tenantId)).toBe(true);
+
+      const rowsScopedToB = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantB.tenantId },
+        (c) => c.query("select tenant_id from public.audit_log where action = 'test.event'").then((r) => r.rows),
+      );
+      expect(rowsScopedToB.every((r) => r.tenant_id === tenantB.tenantId)).toBe(true);
+    } finally {
+      await admin.query("delete from public.audit_log where id in ($1, $2)", [logA.id, logB.id]);
+      await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [
+        tenantB.tenantId,
+        tenantA.profileId,
+      ]);
+    }
+  });
 });
