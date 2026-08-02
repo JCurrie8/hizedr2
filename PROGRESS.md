@@ -16,7 +16,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 **Stack**: Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth (self-hosted, no bundled vendor) + Cloudflare R2 (object storage, not yet used by any feature) + Vercel. pnpm + Turborepo monorepo.
 
-**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.4) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
+**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.5) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
 
 **Deployment**:
 - Marketing site → Vercel project `hized` → `hized.com` / `www.hized.com` (live, working, has real email forwarding via MX/TXT records at the registrar — do not touch this domain's DNS carelessly).
@@ -29,11 +29,11 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - [x] Core schema & migrations (`db/migrations/`, 14 migrations applied to the current production Neon branch as of 2026-08-02)
 - [x] RLS policies + helper functions (`packages/testing/src/rls.test.ts`)
 - [x] Auth integration — invitation signup/acceptance is bound to the single-use token and invited account email, including an existing user joining another tenant; MFA (TOTP) plugin wired server-side but **not yet enforced or given an enrollment UI**
-- [x] Tenant resolution & app shell — subdomain middleware (`apps/web/src/proxy.ts` — Next.js 16 renamed `middleware.ts`; must live under `src/` given this project uses `--src-dir`), login/invite/platform-admin pages
+- [x] Tenant resolution & app shell — subdomain middleware (`apps/web/src/proxy.ts` — Next.js 16 renamed `middleware.ts`; must live under `src/` given this project uses `--src-dir`), authenticated organisation landing/selection, a membership-validated Vercel/localhost path fallback, and login/invite/platform-admin pages
 - [x] Org hierarchy CRUD + drill-down (half-open history, acyclic immediate edits, move cascades ltree paths to descendants, tested; scheduled/backdated mutation is deliberately not exposed yet)
 - [x] Audit logging — writer + both viewer UIs (`/admin/audit`, `/platform-admin/audit`) built; privileged mutations and their events commit atomically, and cross-tenant platform reads are audited before returning
-- [~] CI/CD pipeline — the workflow has a dedicated Neon `ci` branch, owner secret, and mutation guard; the rotated runtime secret still needs GitHub sudo confirmation, after which hosted tests and protected-main required checks can be enabled. A gated staging/production migration-release path also remains
-- [~] Demo tenant seeding & EPIC-01 walkthrough — guarded/idempotent seed tooling and two production demo hierarchies exist; restricted-role verification proves 12/6 own nodes and zero cross-tenant nodes. Real admin invitations and the interactive browser walkthrough remain.
+- [x] CI/CD merge gate — the workflow uses a dedicated Neon `ci` branch with separate owner/runtime secrets and a mutation guard. Protected `main` requires both hosted checks, an up-to-date branch, resolved conversations, and applies the rules to administrators. PR #1 passed and deployed to Vercel production. A gated staging/production schema-release path remains deliberately operator-driven per `docs/runbooks/ci-cd.md`.
+- [~] Demo tenant seeding & EPIC-01 walkthrough — guarded/idempotent seed tooling and two production demo hierarchies exist; restricted-role verification proves 12/6 own nodes and zero cross-tenant nodes. The Northstar signup succeeded and the Harbour invitation exists; releasing the corrected organisation landing route and then verifying both authenticated tenant views remain.
 - [~] Security hardening & Phase 0 exit review — the 2026-08-02 review findings are fixed and covered by integration tests; the broader exit review remains
 
 **Known gaps / deliberately deferred (not oversights — don't "fix" without checking why first)**:
@@ -41,7 +41,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - No Playwright/e2e automation — verification so far has been real vitest integration tests against the live Neon database, plus manual browser checks. Adding proper e2e is welcome but hasn't been prioritized yet.
 - Resend/email is skipped entirely — invite links are shown/copied in the admin UI (`/admin/users`), never emailed. This was an explicit user decision to avoid a paid dependency pre-revenue.
 - Blueprint section 7.5: PLATFORM-005 (cross-tenant health aggregation) and PLATFORM-006 ("view as" impersonation) are explicitly out of scope for MVP.
-- CI uses its own persistent Neon `ci` branch. Its owner secret and mutation guard are configured, but the restricted runtime secret is awaiting GitHub sudo confirmation after a role rotation. Protected-main enforcement is not yet configured, so follow `docs/runbooks/ci-cd.md` before treating CI as a required merge gate.
+- CI is an active required merge gate backed by its own persistent Neon `ci` branch. The CI database is intentionally disposable, while staging/production schema releases remain operator-gated; follow `docs/runbooks/ci-cd.md` before introducing a migration.
 - Local owner/runtime URLs now point to the separate Neon `vercel-dev` branch, which has migrations 0001–0014 and its own restricted `app_user`. The production branch is no longer the default target for local integration tests.
 
 **RLS notes — read before adding or changing a policy**:
@@ -56,6 +56,14 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - A fourth isolation weakness was found by the EPIC-01 production verifier: a genuine profile paired by trusted server code with a tenant it did not belong to could read that tenant's `tenant_memberships`, `org_nodes`, and `invitations`, because those SELECT policies trusted `current_tenant_id()` without independently checking active membership. No client-controlled path around `getAuthContext()` was found, but migration `0014` now binds those reads to `current_user_has_tenant_access()` so a future server context-pairing bug fails closed at RLS too.
 
 ## Session Log
+
+### 2026-08-02 — Codex (protected production gate + EPIC-01 walkthrough)
+
+Completed GitHub sudo approval, saved the rotated restricted CI database secret, and reran PR #1. All four checks passed, including `Quality and production build` and `Migrations and database integration tests`; PR #1 merged to protected `main` at `fb7bbfa`, Vercel reported the corresponding production deployment READY, and the live platform returned 200. Configured `main` to require pull requests, both CI checks, an up-to-date branch, resolved review conversations, and no administrator bypass.
+
+Created real company-admin invitations for the user's account in both Northstar Installations and Harbour Field Services. Opened the Northstar acceptance page for the user to choose their own application password; after acceptance, the remaining EPIC-01 work is to verify both authenticated tenant views and role boundaries. Created `codex/connect-vertical-slice` from the released `main`; the next product build is the blueprint's connector → ETL run/validation → curated job → Pulse KPI thin vertical slice rather than another open-ended hardening pass.
+
+The Northstar signup returned 200 in production, but its client redirect sent the authenticated user to `/dashboard` on the apex Vercel hostname, which cannot supply a tenant slug and therefore correctly rendered the app shell's `Access denied` state. Added an authenticated `/organisations` landing route, single/multi-membership resolution through the existing user-only RLS context, and an apex-only `/t/:slug/*` rewrite for Vercel/localhost; canonical `*.hized.com` links remain unchanged. Login and both invitation acceptance paths now enter through organisation resolution, and a missing tenant slug recovers there instead of presenting a misleading denial. Updated the blueprint to v1.5 with the organisation-selection and preview-routing requirement. Verification passes 40 tests (14 RLS, 23 web, 3 demo-manifest), typecheck, lint, production build, and `git diff --check`.
 
 ### 2026-08-02 — Codex (CI activation)
 

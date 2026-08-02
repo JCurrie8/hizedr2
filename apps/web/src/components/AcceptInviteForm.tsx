@@ -56,7 +56,7 @@ export function AcceptInviteForm({
           setError(signUpError.message ?? "Could not create your account.");
           return;
         }
-        router.push("/dashboard");
+        router.push("/organisations");
         router.refresh();
       }}
     >

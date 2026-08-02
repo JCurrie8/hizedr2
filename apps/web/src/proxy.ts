@@ -37,6 +37,22 @@ export function proxy(request: NextRequest) {
   requestHeaders.delete("x-tenant-slug");
   if (kind === "tenant" && slug) requestHeaders.set("x-tenant-slug", slug);
 
+  // Preview deployments and the temporary *.vercel.app production URL
+  // cannot represent a tenant as a subdomain. Support /t/:slug/* only on
+  // apex hosts, then rewrite it to the normal application route while
+  // preserving the visible URL. This is a routing fallback, not an auth
+  // shortcut: getAuthContext() still verifies the signed-in identity has
+  // an active membership for the derived slug before any tenant query.
+  const pathTenant = kind === "apex"
+    ? request.nextUrl.pathname.match(/^\/t\/([a-z0-9]+(?:-[a-z0-9]+)*)(\/.*)?$/)
+    : null;
+  if (pathTenant) {
+    requestHeaders.set("x-tenant-slug", pathTenant[1]);
+    const url = request.nextUrl.clone();
+    url.pathname = pathTenant[2] || "/dashboard";
+    return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
+  }
+
   // Every path under admin.* is namespaced to /platform-admin, EXCEPT the
   // shared, top-level routes below (/login, /invite/*, /api/auth/*) —
   // those must resolve the same regardless of which hostname reached

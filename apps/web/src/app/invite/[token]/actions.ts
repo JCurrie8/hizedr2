@@ -18,5 +18,5 @@ export async function acceptExistingInviteAction(rawToken: string): Promise<void
     client.release();
   }
 
-  redirect("/dashboard");
+  redirect("/organisations");
 }

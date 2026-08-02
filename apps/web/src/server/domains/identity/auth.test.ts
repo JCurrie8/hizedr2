@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Pool } from "@neondatabase/serverless";
 import { auth } from "./auth";
 import { acceptInvitationByToken, hashToken } from "./invitations";
+import { listTenantChoices } from "../tenancy/tenant-landing";
 
 /**
  * Proves the invite-gated signup flow end to end through Better Auth's
@@ -13,12 +14,14 @@ describe("invite-gated signup", () => {
   const admin = new Pool({ connectionString: process.env.MIGRATIONS_DATABASE_URL });
   const app = new Pool({ connectionString: process.env.DATABASE_URL });
   let tenantId: string;
+  let tenantSlug: string;
   const testEmails: string[] = [];
 
   beforeAll(async () => {
+    tenantSlug = `auth-test-${Date.now()}`;
     const { rows: [tenant] } = await admin.query(
       "insert into public.tenants (slug, name) values ($1, 'Auth Test Tenant') returning id",
-      [`auth-test-${Date.now()}`],
+      [tenantSlug],
     );
     tenantId = tenant.id;
   });
@@ -99,6 +102,10 @@ describe("invite-gated signup", () => {
     expect(membershipRows).toHaveLength(1);
     expect(membershipRows[0].role).toBe("company_admin");
     expect(membershipRows[0].status).toBe("active");
+
+    await expect(listTenantChoices(profileRows[0].id)).resolves.toEqual([
+      expect.objectContaining({ id: tenantId, slug: tenantSlug, name: "Auth Test Tenant" }),
+    ]);
 
     const { rows: invitationRows } = await admin.query(
       "select status from public.invitations where tenant_id = $1 and email = $2",
