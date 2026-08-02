@@ -23,18 +23,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.17.0
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+
+      - name: Enable the repository pnpm version
+        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -68,20 +65,19 @@ jobs:
       DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
       MIGRATIONS_DATABASE_URL: ${{ secrets.CI_MIGRATIONS_DATABASE_URL }}
       CI_DATABASE_SAFE_TO_MUTATE: ${{ vars.CI_DATABASE_SAFE_TO_MUTATE }}
+      BETTER_AUTH_SECRET: ci-integration-only-secret-at-least-32-characters
+      BETTER_AUTH_URL: http://localhost:3000
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.17.0
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+
+      - name: Enable the repository pnpm version
+        run: corepack enable
 
       - name: Require an explicitly isolated CI database
         shell: bash

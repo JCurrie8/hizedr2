@@ -167,7 +167,7 @@ describe("RLS tenant isolation", () => {
     );
     const { rows: [invitation] } = await admin.query(
       `insert into public.invitations (tenant_id, email, role, token_hash)
-       values ($1, $2, 'employee', encode(digest($2, 'sha256'), 'hex')) returning id`,
+       values ($1, $2::text, 'employee', encode(digest($2::text, 'sha256'), 'hex')) returning id`,
       [tenantB.tenantId, `${marker}@test.local`],
     );
     try {

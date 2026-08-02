@@ -32,7 +32,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - [x] Tenant resolution & app shell — subdomain middleware (`apps/web/src/proxy.ts` — Next.js 16 renamed `middleware.ts`; must live under `src/` given this project uses `--src-dir`), login/invite/platform-admin pages
 - [x] Org hierarchy CRUD + drill-down (half-open history, acyclic immediate edits, move cascades ltree paths to descendants, tested; scheduled/backdated mutation is deliberately not exposed yet)
 - [x] Audit logging — writer + both viewer UIs (`/admin/audit`, `/platform-admin/audit`) built; privileged mutations and their events commit atomically, and cross-tenant platform reads are audited before returning
-- [~] CI/CD pipeline — workflow and runbook are built; activation still needs a dedicated Neon CI branch, GitHub secrets/guard variable, protected-main required checks, and a gated staging/production migration-release path
+- [~] CI/CD pipeline — the workflow has a dedicated Neon `ci` branch, owner secret, and mutation guard; the rotated runtime secret still needs GitHub sudo confirmation, after which hosted tests and protected-main required checks can be enabled. A gated staging/production migration-release path also remains
 - [~] Demo tenant seeding & EPIC-01 walkthrough — guarded/idempotent seed tooling and two production demo hierarchies exist; restricted-role verification proves 12/6 own nodes and zero cross-tenant nodes. Real admin invitations and the interactive browser walkthrough remain.
 - [~] Security hardening & Phase 0 exit review — the 2026-08-02 review findings are fixed and covered by integration tests; the broader exit review remains
 
@@ -41,8 +41,8 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - No Playwright/e2e automation — verification so far has been real vitest integration tests against the live Neon database, plus manual browser checks. Adding proper e2e is welcome but hasn't been prioritized yet.
 - Resend/email is skipped entirely — invite links are shown/copied in the admin UI (`/admin/users`), never emailed. This was an explicit user decision to avoid a paid dependency pre-revenue.
 - Blueprint section 7.5: PLATFORM-005 (cross-tenant health aggregation) and PLATFORM-006 ("view as" impersonation) are explicitly out of scope for MVP.
-- CI database infrastructure/repository settings are not provisioned in code: follow `docs/runbooks/ci-cd.md` before treating the GitHub workflow as an active required gate.
-- The currently configured local owner/runtime URLs point to the same Neon branch now used by production. **Do not run the database integration suites against it.** Provision separate development and CI branches first; this is the most immediate environment/CI follow-up.
+- CI uses its own persistent Neon `ci` branch. Its owner secret and mutation guard are configured, but the restricted runtime secret is awaiting GitHub sudo confirmation after a role rotation. Protected-main enforcement is not yet configured, so follow `docs/runbooks/ci-cd.md` before treating CI as a required merge gate.
+- Local owner/runtime URLs now point to the separate Neon `vercel-dev` branch, which has migrations 0001–0014 and its own restricted `app_user`. The production branch is no longer the default target for local integration tests.
 
 **RLS notes — read before adding or changing a policy**:
 - Tenant isolation is Postgres RLS, not Supabase's `auth.uid()` (this project isn't on Supabase — see blueprint's "Resolved since v1.1" note). Session context is two Postgres session variables (`app.current_user_id`, `app.current_tenant_id`) set per-transaction by `packages/db`'s `withUserContext()` — every authenticated query must go through it, or RLS sees no context and fails closed (visible as "nothing", not an error).
@@ -56,6 +56,14 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - A fourth isolation weakness was found by the EPIC-01 production verifier: a genuine profile paired by trusted server code with a tenant it did not belong to could read that tenant's `tenant_memberships`, `org_nodes`, and `invitations`, because those SELECT policies trusted `current_tenant_id()` without independently checking active membership. No client-controlled path around `getAuthContext()` was found, but migration `0014` now binds those reads to `current_user_has_tenant_access()` so a future server context-pairing bug fails closed at RLS too.
 
 ## Session Log
+
+### 2026-08-02 — Codex (CI activation)
+
+Provisioned a persistent Neon `ci` branch cloned from production, configured GitHub's `CI_MIGRATIONS_DATABASE_URL` / `CI_DATABASE_URL` secrets and `CI_DATABASE_SAFE_TO_MUTATE=true` guard, and confirmed the restricted runtime role sees each demo tenant's own hierarchy with zero cross-tenant rows. The first hosted database job correctly failed closed before configuration; after activation, its safety gate and cumulative migrations passed and exposed two test-path issues rather than a database isolation failure.
+
+Added `MIGRATIONS_DATABASE_URL` to Turborepo's environment allowlist so GitHub-supplied owner credentials reach Vitest, and disambiguated the shared invitation fixture parameter's Postgres type. Verification against the isolated CI branch now passes all 35 tests (14 RLS, 18 web, 3 demo-manifest), plus lint, typecheck, production build, and `git diff --check`. Next: merge through a green pull request, require both checks on protected `main`, then finish real admin invitations and the interactive EPIC-01 walkthrough.
+
+Also migrated the existing Neon `vercel-dev` branch through 0014, created its own restricted `app_user`, switched both ignored local environment files away from production, and reran all 35 tests successfully there. The CI role was rotated and its exact connection verified locally; updating GitHub's `CI_DATABASE_URL` is currently paused at GitHub's sudo confirmation because the mobile approval request timed out. PR #1 remains open and unmerged until that secret is saved and both hosted checks pass.
 
 ### 2026-08-02 — Codex (GPT-5 production release + EPIC-01 seed)
 
