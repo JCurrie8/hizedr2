@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -31,7 +31,7 @@ jobs:
           version: 11.17.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
@@ -68,9 +68,11 @@ jobs:
       DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
       MIGRATIONS_DATABASE_URL: ${{ secrets.CI_MIGRATIONS_DATABASE_URL }}
       CI_DATABASE_SAFE_TO_MUTATE: ${{ vars.CI_DATABASE_SAFE_TO_MUTATE }}
+      BETTER_AUTH_SECRET: ci-integration-only-secret-at-least-32-characters
+      BETTER_AUTH_URL: http://localhost:3000
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -78,7 +80,7 @@ jobs:
           version: 11.17.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
