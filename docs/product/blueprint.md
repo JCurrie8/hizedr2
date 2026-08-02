@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.7 |
+| Document status | Build-ready product definition — Version 1.8 |
 
 ### Changes since v1.0
 
@@ -57,6 +57,10 @@ This specification is designed to be handed to an AI software builder, technical
 ### Changes since v1.6
 
 - **Major CRM sources share a first-class incremental adapter contract.** Salesforce and Zendesk are initial supported CRM adapters, with HubSpot and Dynamics 365 able to use the same discovery, extraction, pagination, checkpoint, retry and deletion contract. Salesforce supports the existing operational pattern of querying new/modified records over a rolling lookback (24 hours by default) and idempotently upserting by record ID, strengthened with a persisted high-water mark so delayed jobs cannot create gaps.
+
+### Changes since v1.7
+
+- **The SME multi-source and Custom ETL boundary is explicit.** A tenant can operate several ordinary connectors and pipelines at once because small and mid-sized companies normally spread operational truth across finance, CRM, service, workforce and recurring spreadsheets. Hized Connect does not need a universal self-serve join canvas for MVP: reusable governed transformations reconcile those feeds. Sources or business rules outside the standard adapters are delivered as paid, Hized-managed Custom ETL work, but must still use the same tenant isolation, secrets, lineage, validation and run-monitoring contracts as packaged connectors.
 
 ## 1. Product definition and positioning
 
@@ -115,7 +119,7 @@ Hized Advisory wraps the technology in discovery, data design, KPI definition, i
 | Implementation | Client project team | Connect sources, create data model, configure dashboards, train users | One-off project fee |
 | Managed platform | All users | Hosting, refreshes, monitoring, support, updates and backups | Monthly recurring fee |
 | Performance advisory | Executive and operational leaders | Monthly review, new insights, metric refinement and improvement actions | Monthly retainer |
-| Custom development | Selected clients | New connectors, modules, workflows or integrations | Scoped professional services |
+| Custom ETL and development | Selected clients | Unusual source extraction, multi-source reconciliation, bespoke business rules, new connectors, modules or workflows | Scoped professional services plus an optional managed-support uplift |
 
 ## 3. Users, organisational hierarchy and permissions
 
@@ -224,7 +228,7 @@ Every important metric should be represented as a governed KPI definition rather
 
 ### 5.1 Purpose
 
-Hized Connect provides a repeatable, observable route from client systems to a trusted analytical model. The MVP should prioritise reliable SQL Server, CSV and Excel ingestion before attempting a large connector marketplace.
+Hized Connect provides a repeatable, observable route from client systems to a trusted analytical model. The MVP should prioritise reliable CSV/Excel and SharePoint ingestion plus the named SQL and CRM adapters needed by early customers, rather than attempting a large connector marketplace.
 
 ### 5.2 Connector framework
 
@@ -238,6 +242,8 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-006 | Monitor selected Excel files or folders in SharePoint Online / OneDrive for Business, including Microsoft Forms response workbooks. | Must | Multiple workbook updates per day create distinct, traceable source revisions and pipeline runs without duplicate ingestion from retries or repeated notifications. |
 | CONN-007 | Provide first-class Salesforce and Zendesk adapters on a reusable CRM connector contract; allow HubSpot and Dynamics 365 adapters without changing orchestration. | Must | An administrator can discover supported objects/resources, select fields, test access and run an incremental extract through the same pipeline monitoring surface. |
 | CONN-008 | Persist source-specific incremental checkpoints with an optional overlap window and idempotent upsert key. | Must | A delayed, failed or retried CRM run neither misses records nor duplicates previously loaded records; checkpoints advance only after a successful complete run. |
+| CONN-009 | Support several connectors and pipelines per tenant without implying that every feed must be combined. | Must | A company can ingest finance, CRM, service and spreadsheet feeds independently, then select only the sources needed by each governed dataset/KPI. |
+| CONN-010 | Provide a Hized-managed Custom ETL delivery path for unsupported sources and bespoke cross-source rules. | Should | A custom implementation is commercially distinguishable from standard Connect, versioned and supportable, but its credentials, source batches, validations, retries, lineage and run health remain visible through the ordinary Connect operating surface. |
 
 ### 5.3 Pipeline capabilities
 
@@ -268,6 +274,14 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 - Source-revision history shows the SharePoint/OneDrive item, source modification time, discovered time, Graph version metadata and content hash used by each run.
 
 **MVP constraint:** Do not attempt to become a full visual data-engineering studio in the first release. Configuration-first pipelines, reusable transformations and excellent observability are more valuable than a complex drag-and-drop canvas *(this refers to Connect's pipeline-building UI, not the Hized Canvas dashboard product below)*.
+
+### 5.5 Standard Connect vs Custom ETL
+
+- **Standard Connect** covers packaged file, database, SharePoint and named SaaS adapters plus configuration that can be safely repeated across customers.
+- **Custom ETL** covers unsupported/legacy systems, unusual authentication or pagination, client-specific matching rules, and transformations that reconcile several systems using business knowledge discovered during implementation.
+- Custom ETL is a paid managed-service deliverable, not an ungoverned code bypass. Custom jobs run through the same pipeline/run tables and operational screens, and never receive a broad database or RLS exemption.
+- Repeated custom work should graduate into a reusable adapter or transformation template only after it is proven across customers. The platform should not promise a connector marketplace before that evidence exists.
+- The MVP needs the shared adapter/run contract and a clear service offer; it does **not** need self-service custom-code execution, arbitrary customer scripts or a complete quoting/billing workflow inside the application.
 
 ## 6. Hized Canvas — self-serve dashboards
 
@@ -489,6 +503,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Authentication plus role and organisation-scope permissions.
 - Organisation hierarchy with effective dates and employee assignments.
 - SQL Server/Azure SQL, Salesforce and Zendesk connectors; manual CSV/Excel ingestion; and monitored SharePoint Online / OneDrive Excel sources including Forms response workbooks. HubSpot and Dynamics 365 use the same adapter contract as follow-on connectors.
+- Multiple independent sources per tenant and Hized-delivered Custom ETL for unsupported sources or bespoke reconciliation, without an MVP promise of self-service arbitrary code.
 - Scheduled full and watermark-based incremental pipelines.
 - Raw, staging and curated structures with run logs and validation results.
 - KPI catalogue with definitions, targets, thresholds and versions.
@@ -503,6 +518,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 
 - Large marketplace of packaged SaaS connectors.
 - Full no-code visual transformation canvas for Connect pipeline building *(distinct from the Hized Canvas dashboard product, which is in scope)*.
+- Customer-authored or uploaded executable ETL code; bespoke work is Hized-managed and passes the same review, deployment and monitoring controls as standard adapters.
 - Native mobile applications.
 - Natural-language analytics or autonomous AI decision making.
 - Complex planning, budgeting and write-back workflows.
