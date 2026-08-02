@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tenantEntryUrl } from "./tenant-landing";
+import { tenantAppUrl, tenantEntryUrl } from "./tenant-landing";
 
 describe("tenantEntryUrl", () => {
   it("uses the apex path fallback on Vercel", () => {
@@ -15,5 +15,13 @@ describe("tenantEntryUrl", () => {
   it("preserves http for local hized.com-style testing", () => {
     expect(tenantEntryUrl({ slug: "acme", host: "admin.hized.com", protocol: "http" }))
       .toBe("http://acme.hized.com/dashboard");
+  });
+
+  it("keeps internal tenant navigation inside the Vercel path fallback", () => {
+    expect(tenantAppUrl({
+      slug: "northstar-installations",
+      host: "hized-platform.vercel.app",
+      path: "/admin/connect",
+    })).toBe("/t/northstar-installations/admin/connect");
   });
 });

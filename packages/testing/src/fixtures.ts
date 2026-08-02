@@ -44,8 +44,9 @@ export async function createTenantWithUser(
 }
 
 export async function cleanupFixture(admin: Pool, fixture: TenantFixture) {
-  await admin.query("delete from public.tenant_memberships where tenant_id = $1", [fixture.tenantId]);
+  // Delete the tenant first so tenant-owned rows (including connector rows
+  // that reference the creator profile) cascade before the profile is removed.
+  await admin.query("delete from public.tenants where id = $1", [fixture.tenantId]);
   await admin.query("delete from public.profiles where id = $1", [fixture.profileId]);
   await admin.query(`delete from "user" where id = $1`, [fixture.authUserId]);
-  await admin.query("delete from public.tenants where id = $1", [fixture.tenantId]);
 }

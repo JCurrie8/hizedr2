@@ -12,6 +12,11 @@ describe("RLS tenant isolation", () => {
   const admin = getAdminPool();
   let tenantA: TenantFixture;
   let tenantB: TenantFixture;
+  let tenantEmployee: TenantFixture;
+  let connectorAId: string;
+  let connectorBId: string;
+  let connectorEmployeeId: string;
+  let pipelineAId: string;
 
   beforeAll(async () => {
     tenantA = await createTenantWithUser(admin, {
@@ -24,11 +29,44 @@ describe("RLS tenant isolation", () => {
       name: "RLS Test B",
       email: `rls-b-${Date.now()}@test.local`,
     });
+    tenantEmployee = await createTenantWithUser(admin, {
+      slug: `rls-test-employee-${Date.now()}`,
+      name: "RLS Test Employee",
+      email: `rls-employee-${Date.now()}@test.local`,
+      role: "employee",
+    });
+
+    const { rows: [connectorA] } = await admin.query(
+      `insert into public.connectors (tenant_id, connector_type, name, created_by)
+       values ($1, 'salesforce', 'Salesforce A', $2) returning id`,
+      [tenantA.tenantId, tenantA.profileId],
+    );
+    connectorAId = connectorA.id;
+    const { rows: [connectorB] } = await admin.query(
+      `insert into public.connectors (tenant_id, connector_type, name, created_by)
+       values ($1, 'salesforce', 'Salesforce B', $2) returning id`,
+      [tenantB.tenantId, tenantB.profileId],
+    );
+    connectorBId = connectorB.id;
+    const { rows: [connectorEmployee] } = await admin.query(
+      `insert into public.connectors (tenant_id, connector_type, name, created_by)
+       values ($1, 'file_upload', 'Employee tenant file source', $2) returning id`,
+      [tenantEmployee.tenantId, tenantEmployee.profileId],
+    );
+    connectorEmployeeId = connectorEmployee.id;
+    const { rows: [pipelineA] } = await admin.query(
+      `insert into public.pipelines
+         (tenant_id, connector_id, name, load_mode, key_columns, created_by)
+       values ($1, $2, 'Salesforce accounts', 'upsert', array['Id'], $3) returning id`,
+      [tenantA.tenantId, connectorAId, tenantA.profileId],
+    );
+    pipelineAId = pipelineA.id;
   });
 
   afterAll(async () => {
     await cleanupFixture(admin, tenantA);
     await cleanupFixture(admin, tenantB);
+    await cleanupFixture(admin, tenantEmployee);
     await admin.end();
   });
 
@@ -139,9 +177,10 @@ describe("RLS tenant isolation", () => {
         "get_membership_for_slug",
         "get_profile_for_auth_user",
         "has_pending_invitation_by_token",
+        "is_connect_operator",
       ]],
     );
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(7);
     expect(rows.every((row) => row.public_execute === false)).toBe(true);
   });
 
@@ -261,5 +300,104 @@ describe("RLS tenant isolation", () => {
         tenantA.profileId,
       ]);
     }
+  });
+
+  it("Connect operators with multiple memberships only see the explicitly selected tenant", async () => {
+    await admin.query(
+      "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'company_admin', 'active')",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    try {
+      const rowsA = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (c) => c.query("select id, tenant_id from public.connectors order by id").then((r) => r.rows),
+      );
+      expect(rowsA).toEqual([{ id: connectorAId, tenant_id: tenantA.tenantId }]);
+
+      const rowsB = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantB.tenantId },
+        (c) => c.query("select id, tenant_id from public.connectors order by id").then((r) => r.rows),
+      );
+      expect(rowsB).toEqual([{ id: connectorBId, tenant_id: tenantB.tenantId }]);
+    } finally {
+      await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [
+        tenantB.tenantId,
+        tenantA.profileId,
+      ]);
+    }
+  });
+
+  it("Connect tables fail closed for a mismatched real user and tenant context", async () => {
+    const rows = await withUserContext(
+      { userId: tenantA.profileId, tenantId: tenantB.tenantId },
+      (c) => c.query("select id from public.connectors where id = $1", [connectorBId]).then((r) => r.rows),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it("an employee cannot read or create Connect configuration", async () => {
+    const rows = await withUserContext(
+      { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+      (c) => c.query("select id from public.connectors where id = $1", [connectorEmployeeId]).then((r) => r.rows),
+    );
+    expect(rows).toHaveLength(0);
+
+    await expect(
+      withUserContext(
+        { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+        (c) => c.query(
+          `insert into public.connectors (tenant_id, connector_type, name, created_by)
+           values ($1, 'file_upload', 'Forbidden source', $2)`,
+          [tenantEmployee.tenantId, tenantEmployee.profileId],
+        ),
+      ),
+    ).rejects.toThrow(/row-level security/);
+  });
+
+  it("deduplicates an unchanged source item by connector, item id, and content hash", async () => {
+    const hash = "a".repeat(64);
+    await admin.query(
+      `insert into public.source_batches
+         (tenant_id, connector_id, batch_kind, source_item_id, source_name,
+          content_sha256, content_type, size_bytes, storage_key)
+       values ($1, $2, 'api_extract', 'Account', 'Account extract', $3,
+               'application/x-ndjson', 10, 'test/account-a.ndjson')`,
+      [tenantA.tenantId, connectorAId, hash],
+    );
+    await expect(
+      admin.query(
+        `insert into public.source_batches
+           (tenant_id, connector_id, batch_kind, source_item_id, source_name,
+            content_sha256, content_type, size_bytes, storage_key)
+         values ($1, $2, 'api_extract', 'Account', 'Account extract replay', $3,
+                 'application/x-ndjson', 10, 'test/account-a-replay.ndjson')`,
+        [tenantA.tenantId, connectorAId, hash],
+      ),
+    ).rejects.toThrow(/source_batches_connector_id_source_item_id_content_sha256_key/);
+  });
+
+  it("rejects pairing a pipeline with a batch from another connector in the same tenant", async () => {
+    const { rows: [otherConnector] } = await admin.query(
+      `insert into public.connectors (tenant_id, connector_type, name, created_by)
+       values ($1, 'zendesk', 'Zendesk A', $2) returning id`,
+      [tenantA.tenantId, tenantA.profileId],
+    );
+    const { rows: [otherBatch] } = await admin.query(
+      `insert into public.source_batches
+         (tenant_id, connector_id, batch_kind, source_item_id, source_name,
+          content_sha256, content_type, size_bytes, storage_key)
+       values ($1, $2, 'api_extract', 'tickets', 'Zendesk tickets', $3,
+               'application/x-ndjson', 10, 'test/zendesk.ndjson') returning id`,
+      [tenantA.tenantId, otherConnector.id, "b".repeat(64)],
+    );
+
+    await expect(
+      admin.query(
+        `insert into public.pipeline_runs
+           (tenant_id, pipeline_id, connector_id, source_batch_id, trigger_type)
+         values ($1, $2, $3, $4, 'schedule')`,
+        [tenantA.tenantId, pipelineAId, connectorAId, otherBatch.id],
+      ),
+    ).rejects.toThrow(/pipeline_runs_source_batch_id_tenant_id_connector_id_fkey/);
   });
 });
