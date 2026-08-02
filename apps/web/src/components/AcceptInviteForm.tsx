@@ -3,13 +3,40 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
+import { acceptExistingInviteAction } from "@/app/invite/[token]/actions";
 
-export function AcceptInviteForm({ email }: { email: string }) {
+export function AcceptInviteForm({
+  email,
+  token,
+  signedInEmail,
+}: {
+  email: string;
+  token: string;
+  signedInEmail: string | null;
+}) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  if (signedInEmail) {
+    const emailMatches = signedInEmail.toLowerCase() === email.toLowerCase();
+    return (
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-muted">Signed in as {signedInEmail}.</p>
+        {emailMatches ? (
+          <form action={acceptExistingInviteAction.bind(null, token)}>
+            <button type="submit" className="w-full rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white">
+              Accept invite
+            </button>
+          </form>
+        ) : (
+          <p className="text-sm text-danger">Sign out and open this invitation as {email}.</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <form
@@ -18,7 +45,12 @@ export function AcceptInviteForm({ email }: { email: string }) {
         e.preventDefault();
         setError(null);
         setPending(true);
-        const { error: signUpError } = await authClient.signUp.email({ email, password, name });
+        const { error: signUpError } = await authClient.signUp.email({
+          email,
+          password,
+          name,
+          fetchOptions: { headers: { "x-invite-token": token } },
+        });
         setPending(false);
         if (signUpError) {
           setError(signUpError.message ?? "Could not create your account.");

@@ -3,6 +3,7 @@ import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins";
 import { Pool } from "@neondatabase/serverless";
+import { hashToken, isValidInviteToken } from "./invitations";
 
 /**
  * Better Auth owns its own tables (user, session, account, verification,
@@ -61,26 +62,40 @@ export const auth = betterAuth({
   databaseHooks: {
     user: {
       create: {
-        // Provisioning is invite-only (blueprint 9.1) — no invitation,
+        // Provisioning is invite-only (blueprint 9.1) — no valid token,
         // no account. Runs through a SECURITY DEFINER function (see
-        // 0004_invite_provisioning.sql) because at this point there is
+        // 0013_security_hardening.sql) because at this point there is
         // no tenant_membership yet, so the normal RLS-gated path would
         // see nothing and reject every signup, invited or not.
-        before: async (user) => {
-          const { rows } = await pool.query("select public.has_pending_invitation($1) as ok", [user.email]);
+        before: async (user, context) => {
+          const rawInviteToken = context?.headers?.get("x-invite-token");
+          if (!rawInviteToken || !isValidInviteToken(rawInviteToken)) {
+            throw new APIError("BAD_REQUEST", { message: "A valid invitation link is required." });
+          }
+          const { rows } = await pool.query(
+            "select public.has_pending_invitation_by_token($1, $2) as ok",
+            [user.email, hashToken(rawInviteToken)],
+          );
           if (!rows[0]?.ok) {
             throw new APIError("BAD_REQUEST", {
-              message: "This email has no pending invitation. Ask your admin to invite you first.",
+              message: "This invitation is invalid, expired, or belongs to another email.",
             });
           }
         },
         // Creates the profiles row + activates the tenant_membership from
         // the matching invitation, atomically, via the same SECURITY
-        // DEFINER function — see 0004_invite_provisioning.sql. This is
+        // DEFINER function — see 0013_security_hardening.sql. This is
         // deliberately the ONLY path that can create a public.profiles
         // row; there is no other INSERT policy on that table.
-        after: async (user) => {
-          await pool.query("select public.accept_invitation_by_email($1, $2)", [user.id, user.email]);
+        after: async (user, context) => {
+          const rawInviteToken = context?.headers?.get("x-invite-token");
+          if (!rawInviteToken || !isValidInviteToken(rawInviteToken)) {
+            throw new Error("Invite token disappeared during signup");
+          }
+          await pool.query("select * from public.accept_invitation_by_token($1, $2)", [
+            user.id,
+            hashToken(rawInviteToken),
+          ]);
         },
       },
     },

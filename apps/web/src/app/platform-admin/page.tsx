@@ -1,15 +1,11 @@
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
-import { writeAuditLog } from "@/server/domains/access-control/audit";
+import { insertAuditLog } from "@/server/domains/access-control/audit";
 import { createTenantAction } from "./actions";
 
 export default async function PlatformAdminHome() {
   const ctx = await getAuthContextFromRequest({ platformAdminRoute: true });
   if (ctx.kind !== "platform_admin") return null; // layout already handles other cases
-
-  const tenants = await withUserContext({ userId: ctx.profileId }, (c) =>
-    c.query("select id, slug, name, status from public.tenants order by name").then((r) => r.rows),
-  );
 
   // PLATFORM-003: every cross-tenant view by a platform admin is audited,
   // distinguishable from ordinary tenant-scoped activity — this list view
@@ -18,11 +14,15 @@ export default async function PlatformAdminHome() {
   // "well, they're a platform admin." tenant_id is null: this isn't about
   // any one tenant, so the audit_log insert policy's platform-level
   // branch applies instead of the tenant-scoped one.
-  await writeAuditLog({
-    tenantId: null,
-    actorUserId: ctx.profileId,
-    action: "platform_admin.viewed_tenant_list",
-    metadata: { tenantCount: tenants.length },
+  const tenants = await withUserContext({ userId: ctx.profileId }, async (c) => {
+    const { rows } = await c.query("select id, slug, name, status from public.tenants order by name");
+    await insertAuditLog(c, {
+      tenantId: null,
+      actorUserId: ctx.profileId,
+      action: "platform_admin.viewed_tenant_list",
+      metadata: { tenantCount: rows.length },
+    });
+    return rows;
   });
 
   return (

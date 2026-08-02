@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.2 |
+| Document status | Build-ready product definition — Version 1.3 |
 
 ### Changes since v1.0
 
@@ -31,6 +31,14 @@ This specification is designed to be handed to an AI software builder, technical
 
 - **Section 7, Hized Platform Administration, added.** Previously the Platform Super Admin persona was named once (section 3.2, "manage tenants, platform configuration, support access and system health") with no functional-scope section of its own — unlike Pulse, Connect and Canvas, which each get one. It now does.
 - **Reference architecture (section 9.1) corrected to Neon + Better Auth + Cloudflare R2.** V1.1 specified Supabase (Postgres + Auth + Storage bundled). The build moved to Neon (Postgres) once in progress — free tier, database branching included free — which has no bundled Auth or Storage, so those became independent choices: Better Auth (self-hosted on the same Postgres, no per-user vendor cost) and Cloudflare R2 (zero egress fees). Tenant isolation is still Postgres Row-Level Security keyed on TenantId; the session mechanism that feeds it changed from Supabase's `auth.uid()` to an application-set session variable, since Neon has no equivalent built in.
+
+### Changes since v1.2
+
+- **Security invariants made explicit.** Invitation acceptance requires possession of the high-entropy invitation token, not merely knowledge of the invited email address; an existing authenticated user can use a valid token to join an additional tenant.
+- **Hierarchy temporal semantics clarified.** Effective-date ranges are half-open (`valid_from` inclusive, `valid_to` exclusive), organisation trees must remain acyclic, and Phase 0 interactive edits/deactivations take effect immediately. Initial imports may establish a past `valid_from`; scheduled or backdated reorganisations require a dedicated workflow before they are exposed.
+- **Audit guarantees strengthened.** A privileged mutation and its audit event must commit atomically, and a cross-tenant platform-admin read must not return data unless its corresponding audit event can be written.
+- **Database trust boundary clarified.** Tenant session context cannot exist without a verified user identity; privileged database functions use fixed search paths and explicit role grants rather than PostgreSQL's implicit `PUBLIC` execution.
+- **Delivery safety clarified.** Database integration tests run only against an explicitly dedicated CI database branch, and production deployment follows required CI checks on a protected main branch.
 
 ## 1. Product definition and positioning
 
@@ -99,10 +107,10 @@ The organisational hierarchy is a first-class data structure. Dashboards must no
 
 | ID | Requirement | Priority | Acceptance signal |
 |---|---|---|---|
-| ORG-001 | Support an arbitrary organisation tree with company, function, department, region/site, manager, team and employee nodes. | Must | An administrator can create, move and deactivate nodes without code changes. |
+| ORG-001 | Support an arbitrary, acyclic organisation tree with company, function, department, region/site, manager, team and employee nodes. | Must | An administrator can create, move and deactivate nodes without code changes, and a node cannot be moved beneath itself or a descendant. |
 | ORG-002 | Associate users, employees, targets, KPIs and source records with one or more organisation nodes. | Must | A metric can be filtered and aggregated at each hierarchy level. |
 | ORG-003 | Allow authorised users to drill from an aggregate result into lower levels and supporting records. | Must | An executive can move from company to region to team to employee where permitted. |
-| ORG-004 | Support effective dates for hierarchy changes. | Should | Historical results remain attributed to the correct structure for the selected period. |
+| ORG-004 | Support effective dates for hierarchy changes using half-open intervals (`valid_from <= date < valid_to`). | Should | Historical results remain attributed to exactly one correct structure for the selected period; the effective-date boundary never exposes both old and new scope paths. |
 | ORG-005 | Permit dotted-line or cross-functional membership. | Could | An employee can belong to a home team and an additional project or matrix group. |
 
 ### 3.2 Core personas
@@ -125,6 +133,7 @@ The organisational hierarchy is a first-class data structure. Dashboards must no
 - Column and metric restrictions protect salary, HR, health, disciplinary and commercially sensitive data.
 - Employee-facing views must only expose approved metrics and comparisons.
 - All permission changes, exports and sensitive drill-through actions must be audited.
+- Invitation tokens are bearer secrets: possession of the invited email address alone never grants signup or tenant membership. Existing authenticated users can accept a valid invitation into an additional tenant without creating a second identity.
 
 ## 4. Hized Pulse functional scope
 
@@ -292,7 +301,7 @@ Company Admin (section 3.2) manages one tenant, from inside it. Platform Super A
 
 ### 7.4 Governance guardrail
 
-Platform Super Admin's reach is the single most powerful access level in the system — it is also the one clients have to trust blindly, since they can't see it working. Every RLS policy branch that grants a platform admin cross-tenant access (see section 9.2) must have a corresponding audit-log write; there is no "quiet" bypass path. PLATFORM-006 ("view as") is explicitly the highest-risk capability here and should not be built casually — it needs its own time-boxing and audit design before it ships, not just a role check.
+Platform Super Admin's reach is the single most powerful access level in the system — it is also the one clients have to trust blindly, since they can't see it working. Every RLS policy branch that grants a platform admin cross-tenant access (see section 9.2) must have a corresponding audit-log write; there is no "quiet" bypass path. A privileged mutation and its audit event commit in one database transaction, and a cross-tenant read must not return data if its audit event cannot be written. PLATFORM-006 ("view as") is explicitly the highest-risk capability here and should not be built casually — it needs its own time-boxing and audit design before it ships, not just a role check.
 
 ### 7.5 Explicitly out of scope for MVP
 
@@ -365,6 +374,8 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 
 **Architecture choice:** Use a modular monolith first. Preserve boundaries for Identity, Tenancy, Organisation, Connectors, Pipelines, Semantic Metrics, Dashboards, Canvas, Alerts and Platform Administration as clear code-level domains within the Next.js app, but avoid premature microservices.
 
+**Delivery boundary:** CI uses a separate, disposable Neon branch with distinct owner and RLS-enforcing runtime credentials. Migration/integration jobs must fail closed unless that branch is explicitly configured as safe to mutate. Production deploys from a protected main branch only after required lint, typecheck, build, migration and isolation-test checks have passed; deployment credentials and database URLs remain in their respective managed secret stores.
+
 ### 9.2 Multi-tenancy
 
 - Every request and persisted record is tenant-scoped.
@@ -373,6 +384,8 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - No client can enumerate or infer another tenant's users, data, identifiers, exports or logs.
 - Support tenant-specific branding, time zone, financial calendar, retention, data residency and feature flags.
 - Create automated tests specifically designed to detect cross-tenant access failures.
+- Reject any attempt to set tenant session context without a verified user identity. Client-supplied routing headers, tenant IDs or profile IDs are never accepted as proof of authorization.
+- Treat every `SECURITY DEFINER` function as a privileged internal API: use a fixed/empty search path, schema-qualify referenced objects, revoke execution from `PUBLIC`, and grant only the minimum runtime role that requires it.
 
 ### 9.3 Security requirements
 
@@ -381,6 +394,8 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Least-privilege, read-only source connections wherever possible.
 - MFA and SSO for privileged users.
 - Immutable audit events for authentication, permissions, exports, connector changes and sensitive data access.
+- Invitation signup and acceptance are authorized by a single-use, expiring, high-entropy token bound to the invited email. The raw token is never stored.
+- Row policies and column privileges work together: self-service profile updates cannot alter identity linkage, staff status or other authorization attributes.
 - Rate limiting, input validation, secure file scanning and protection against injection and cross-site attacks.
 - Backup, point-in-time recovery and tested restoration procedures.
 - Data retention and deletion workflows, including tenant offboarding.
@@ -499,6 +514,7 @@ Use a field-service, customer-care, logistics, energy, construction or installat
 10. The platform can onboard a second tenant without copying or branching application code.
 11. A Canvas board built by one user cannot expose data the viewer isn't otherwise permitted to see.
 12. A platform admin can provision and view every tenant, and every one of those cross-tenant actions is independently visible in the audit log — not just the client-facing audit trail.
+13. Knowing an invited email address without the matching raw invitation token cannot create an account or membership; the same valid token can be consumed by the matching already-authenticated user to join another tenant.
 
 ### 12.2 Definition of done for each feature
 
@@ -506,6 +522,7 @@ Use a field-service, customer-care, logistics, energy, construction or installat
 - Authorisation and cross-tenant tests included.
 - Loading, empty, error, no-access and stale-data states designed.
 - Audit and observability events included where relevant.
+- Privileged mutations and their audit events are transactionally atomic; privileged reads fail closed if their audit event cannot be recorded.
 - Keyboard and screen-reader behaviour considered.
 - Responsive layout verified at desktop, tablet and mobile widths.
 - Database migration, rollback and seed/demo data supplied.

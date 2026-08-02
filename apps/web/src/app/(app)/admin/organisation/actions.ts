@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { withUserContext } from "@hized/db";
 import type { OrgNodeType } from "@hized/contracts";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
-import { writeAuditLog } from "@/server/domains/access-control/audit";
+import { insertAuditLog } from "@/server/domains/access-control/audit";
 import { createOrgNode, deactivateOrgNode } from "@/server/domains/organisation/org-nodes";
 
 /**
@@ -30,17 +30,16 @@ export async function createNodeAction(formData: FormData) {
   const parentId = String(formData.get("parentId") ?? "") || null;
   if (!name) throw new Error("Name is required.");
 
-  const node = await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, (c) =>
-    createOrgNode(c, { tenantId: ctx.tenant.id, nodeType, name, parentId }),
-  );
-
-  await writeAuditLog({
-    tenantId: ctx.tenant.id,
-    actorUserId: ctx.profileId,
-    action: "org_node.created",
-    targetType: "org_node",
-    targetId: node.orgNodeId,
-    metadata: { nodeType, name, parentId },
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (c) => {
+    const node = await createOrgNode(c, { tenantId: ctx.tenant.id, nodeType, name, parentId });
+    await insertAuditLog(c, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "org_node.created",
+      targetType: "org_node",
+      targetId: node.orgNodeId,
+      metadata: { nodeType, name, parentId },
+    });
   });
 
   revalidatePath("/admin/organisation");
@@ -50,16 +49,15 @@ export async function deactivateNodeAction(formData: FormData) {
   const ctx = await requireCompanyAdmin();
   const orgNodeId = String(formData.get("orgNodeId"));
 
-  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, (c) =>
-    deactivateOrgNode(c, { orgNodeId }),
-  );
-
-  await writeAuditLog({
-    tenantId: ctx.tenant.id,
-    actorUserId: ctx.profileId,
-    action: "org_node.deactivated",
-    targetType: "org_node",
-    targetId: orgNodeId,
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (c) => {
+    await deactivateOrgNode(c, { orgNodeId });
+    await insertAuditLog(c, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "org_node.deactivated",
+      targetType: "org_node",
+      targetId: orgNodeId,
+    });
   });
 
   revalidatePath("/admin/organisation");

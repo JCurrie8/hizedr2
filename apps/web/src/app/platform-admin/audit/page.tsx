@@ -1,13 +1,13 @@
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
+import { insertAuditLog } from "@/server/domains/access-control/audit";
 
 export default async function PlatformAuditPage() {
   const ctx = await getAuthContextFromRequest({ platformAdminRoute: true });
   if (ctx.kind !== "platform_admin") return null;
 
-  const events = await withUserContext({ userId: ctx.profileId }, (c) =>
-    c
-      .query(
+  const events = await withUserContext({ userId: ctx.profileId }, async (c) => {
+    const { rows } = await c.query(
         `select al.id, al.tenant_id, t.name as tenant_name, al.action, al.target_type, al.target_id,
                 al.metadata, al.created_at, p.full_name as actor_name
          from public.audit_log al
@@ -15,9 +15,15 @@ export default async function PlatformAuditPage() {
          left join public.tenants t on t.id = al.tenant_id
          order by al.created_at desc
          limit 200`,
-      )
-      .then((r) => r.rows),
-  );
+      );
+    await insertAuditLog(c, {
+      tenantId: null,
+      actorUserId: ctx.profileId,
+      action: "platform_admin.viewed_audit_log",
+      metadata: { eventCount: rows.length },
+    });
+    return rows;
+  });
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">

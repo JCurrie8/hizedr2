@@ -16,7 +16,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 **Stack**: Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth (self-hosted, no bundled vendor) + Cloudflare R2 (object storage, not yet used by any feature) + Vercel. pnpm + Turborepo monorepo.
 
-**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.2) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
+**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.3) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
 
 **Deployment**:
 - Marketing site → Vercel project `hized` → `hized.com` / `www.hized.com` (live, working, has real email forwarding via MX/TXT records at the registrar — do not touch this domain's DNS carelessly).
@@ -26,21 +26,22 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 - [x] Repo scaffold, Hized design tokens ported into Tailwind
 - [x] Neon + Better Auth + R2 provisioned
-- [x] Core schema & migrations (`db/migrations/`, 11 migrations applied as of this entry)
+- [x] Core schema & migrations (`db/migrations/`, 13 migrations applied to development as of 2026-08-02)
 - [x] RLS policies + helper functions (`packages/testing/src/rls.test.ts`)
-- [x] Auth integration — invite-gated signup enforced at the DB level; MFA (TOTP) plugin wired server-side but **not yet enforced or given an enrollment UI**
+- [x] Auth integration — invitation signup/acceptance is bound to the single-use token and invited account email, including an existing user joining another tenant; MFA (TOTP) plugin wired server-side but **not yet enforced or given an enrollment UI**
 - [x] Tenant resolution & app shell — subdomain middleware (`apps/web/src/proxy.ts` — Next.js 16 renamed `middleware.ts`; must live under `src/` given this project uses `--src-dir`), login/invite/platform-admin pages
-- [x] Org hierarchy CRUD + drill-down (effective-dated edits, move cascades ltree paths to descendants, tested)
-- [~] Audit logging — writer + both viewer UIs (`/admin/audit`, `/platform-admin/audit`) built; check git log for exactly which actions are wired up as of your session
-- [ ] CI/CD pipeline
+- [x] Org hierarchy CRUD + drill-down (half-open history, acyclic immediate edits, move cascades ltree paths to descendants, tested; scheduled/backdated mutation is deliberately not exposed yet)
+- [x] Audit logging — writer + both viewer UIs (`/admin/audit`, `/platform-admin/audit`) built; privileged mutations and their events commit atomically, and cross-tenant platform reads are audited before returning
+- [~] CI/CD pipeline — workflow and runbook are built; activation still needs a dedicated Neon CI branch, GitHub secrets/guard variable, protected-main required checks, and a gated staging/production migration-release path
 - [ ] Demo tenant seeding & EPIC-01 walkthrough
-- [ ] Security hardening & Phase 0 exit review
+- [~] Security hardening & Phase 0 exit review — the 2026-08-02 review findings are fixed and covered by integration tests; the broader exit review remains
 
 **Known gaps / deliberately deferred (not oversights — don't "fix" without checking why first)**:
 - MFA enrollment UI + enforcement — plugin exists, nothing requires it yet.
 - No Playwright/e2e automation — verification so far has been real vitest integration tests against the live Neon database, plus manual browser checks. Adding proper e2e is welcome but hasn't been prioritized yet.
 - Resend/email is skipped entirely — invite links are shown/copied in the admin UI (`/admin/users`), never emailed. This was an explicit user decision to avoid a paid dependency pre-revenue.
 - Blueprint section 7.5: PLATFORM-005 (cross-tenant health aggregation) and PLATFORM-006 ("view as" impersonation) are explicitly out of scope for MVP.
+- CI database infrastructure/repository settings are not provisioned in code: follow `docs/runbooks/ci-cd.md` before treating the GitHub workflow as an active required gate.
 
 **RLS notes — read before adding or changing a policy**:
 - Tenant isolation is Postgres RLS, not Supabase's `auth.uid()` (this project isn't on Supabase — see blueprint's "Resolved since v1.1" note). Session context is two Postgres session variables (`app.current_user_id`, `app.current_tenant_id`) set per-transaction by `packages/db`'s `withUserContext()` — every authenticated query must go through it, or RLS sees no context and fails closed (visible as "nothing", not an error).
@@ -50,8 +51,21 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
   - `db/migrations/0007`: the `tenants` table's own SELECT policy queried `tenant_memberships` directly in a subquery — but RLS policies (unlike `SECURITY DEFINER` functions) run with the caller's own privileges, so that nested read was itself blocked by `tenant_memberships`' RLS when no tenant context was set yet (the literal "which tenants am I in" case). Fixed with a dedicated `SECURITY DEFINER` function, `current_user_tenant_ids()`.
   - `db/migrations/0011`: `audit_log`'s SELECT policy had the exact same shape as 0006, found by inspection before building the audit viewer UI on top of it — worth checking for this pattern in any table you add a "company_admin can manage their own tenant's X" policy to.
 - Rule of thumb for a new tenant-scoped table's admin-write policy: `tenant_id = current_tenant_id() and (is_company_admin(tenant_id) or is_platform_admin())` — not just the role check alone.
+- Migration `0013` hardens the surrounding database trust boundary: tenant context without a user is rejected in `withUserContext`, audit actors are session-bound, profile security columns are not runtime-updatable, invitation authority is token-bound, and Hized `SECURITY DEFINER` helpers use fixed search paths with no `PUBLIC` execute grant. Preserve those function and column grants in future migrations.
 
 ## Session Log
+
+### 2026-08-02 — Codex (GPT-5 implementation)
+
+Implemented every actionable finding from the preceding review. Migration `0013_security_hardening.sql` was applied to development: invitations now require the stored token hash and resolve the Better Auth account email in the database, existing users can accept an invitation to another tenant, hierarchy scope ranges are consistently half-open, audit actors and profile-column privileges are constrained, and all Hized `SECURITY DEFINER` helpers have fixed search paths and explicit grants. `withUserContext` now rejects tenant-only context and the proxy strips untrusted incoming tenant headers.
+
+Organisation moves now lock the affected tree, reject self/descendant parents, cascade paths with scope assertions, and permit only immediate interactive edits until scheduled/backdated reorganisation semantics are designed (initial imports can still establish history). Privileged mutations and reads now write audit events in the same transaction. Updated the product blueprint to v1.3 with these invariants, added the GitHub Actions CI workflow plus `docs/runbooks/ci-cd.md`, and retained Vercel Git integration as the sole deployment path. Verification passed: 31 integration tests (13 RLS + 18 web), typecheck, lint, production build, and `git diff --check`. CI activation still requires the dedicated Neon branch/secrets/guard variable, protected-main settings, and a gated staging/production migration-release path described in the runbook; next product task after that is demo tenant seeding and the EPIC-01 walkthrough.
+
+### 2026-08-02 — Codex (GPT-5 review)
+
+Security/correctness review only; no production code changed. Read the v1.2 blueprint and reviewed migrations 0003/0006/0007/0011, `withUserContext`, `getAuthContext`, org hierarchy operations/tests, proxy routing, and the relevant auth/audit call sites. The three recorded RLS fixes are sound in the final cumulative schema, the live runtime role is correctly non-superuser/non-`BYPASSRLS`, and the existing focused suites passed (8 RLS tests + 11 web tests; typecheck also passed).
+
+Disagreements / follow-ups found: (1) invite acceptance is not bound to the secret token or verified email ownership — Better Auth signup accepts anyone who knows a pending invited email, and the existing auth test actually exercises signup with an arbitrary unused token hash; treat this as the highest-priority security issue. (2) `editOrgNode` permits moving a node under its own descendant and persists a parent cycle; a temporary live integration probe confirmed it. (3) `current_user_scope_paths()` treats `valid_to` as inclusive (`>=`) while the schema/list queries use an exclusive end, so a move effective today returns both old and new scope paths; also confirmed live. (4) `/platform-admin/audit` reads cross-tenant data without logging that view, contrary to PLATFORM-003/section 7.4, and privileged mutations generally commit in a separate transaction from their audit write, so an audit failure can leave an unaudited successful action. (5) `profiles: update self only` restricts rows but not columns, so the broad `app_user` UPDATE grant permits changing security-sensitive `auth_user_id` and `is_hized_staff` if a self-profile update path is added. (6) `withUserContext` accepts `tenantId` with a null/unvalidated `userId` (an invalid state that tenant-only SELECT policies would honor), `proxy.ts` preserves a client-supplied `x-tenant-slug` on non-tenant hosts, and the live `SECURITY DEFINER` helpers still grant EXECUTE to `PUBLIC`; none has a current HTTP exploit path found, but all weaken the intended trust boundary and should be hardened during the Phase 0 security pass.
 
 ### 2026-08-02 — Claude (Sonnet 5)
 

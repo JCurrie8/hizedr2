@@ -38,8 +38,13 @@ async function main() {
   await pool.query("alter default privileges in schema public grant select, insert, update, delete on tables to app_user");
   await pool.query("alter default privileges in schema public grant usage, select on sequences to app_user");
   await pool.query("alter default privileges in schema public grant execute on functions to app_user");
+  await pool.query("alter default privileges in schema public revoke execute on functions from public");
   // audit_log's own revoke (0002) is broader than public — re-assert app_user still can't update/delete it.
   await pool.query("revoke update, delete on public.audit_log from app_user");
+  // RLS limits profile rows, not columns. Identity linkage and Hized-staff
+  // status remain owner-only; app_user may edit display fields only.
+  await pool.query("revoke update on public.profiles from app_user");
+  await pool.query("grant update (full_name, avatar_url) on public.profiles to app_user");
 
   const url = new URL(adminUrl);
   url.username = "app_user";

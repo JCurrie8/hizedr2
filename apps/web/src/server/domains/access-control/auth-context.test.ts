@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Pool } from "@neondatabase/serverless";
 import { auth } from "../identity/auth";
 import { getAuthContext } from "./auth-context";
+import { hashToken } from "../identity/invitations";
 
 /**
  * Proves getAuthContext() end to end: unauthenticated, wrong-tenant
@@ -17,6 +18,7 @@ describe("getAuthContext", () => {
   const email = `ctx-test-${Date.now()}@test.local`;
   let sessionHeaders: Headers;
   let profileId: string;
+  const rawInviteToken = "c".repeat(43);
 
   beforeAll(async () => {
     const { rows: [tenantA] } = await admin.query(
@@ -31,8 +33,8 @@ describe("getAuthContext", () => {
     tenantBId = tenantB.id;
 
     await admin.query(
-      "insert into public.invitations (tenant_id, email, role, token_hash) values ($1, $2, 'manager', 'unused')",
-      [tenantAId, email],
+      "insert into public.invitations (tenant_id, email, role, token_hash) values ($1, $2, 'manager', $3)",
+      [tenantAId, email, hashToken(rawInviteToken)],
     );
 
     // asResponse: true gives back a real Response with a correctly signed
@@ -40,6 +42,7 @@ describe("getAuthContext", () => {
     // token doesn't work, Better Auth signs session cookies by default.
     const response = await auth.api.signUpEmail({
       body: { email, name: "Ctx Test", password: "correct-horse-battery-staple" },
+      headers: new Headers({ "x-invite-token": rawInviteToken }),
       asResponse: true,
     });
     const setCookie = response.headers.get("set-cookie") ?? "";

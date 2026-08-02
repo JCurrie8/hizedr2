@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  quality:
+    name: Quality and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build production application
+        run: pnpm build
+        env:
+          # The build imports the server modules but does not connect. Real
+          # credentials are supplied by Vercel at deployment/runtime.
+          DATABASE_URL: postgresql://app_user:ci-build-only@127.0.0.1:5432/hized
+          BETTER_AUTH_SECRET: ci-build-only-secret-at-least-32-characters
+          BETTER_AUTH_URL: http://localhost:3000
+
+  database-tests:
+    name: Migrations and database integration tests
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # All branches deliberately share one isolated CI database, so migration
+      # and fixture mutations must not run concurrently.
+      group: hized-ci-database
+      cancel-in-progress: false
+    env:
+      DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+      MIGRATIONS_DATABASE_URL: ${{ secrets.CI_MIGRATIONS_DATABASE_URL }}
+      CI_DATABASE_SAFE_TO_MUTATE: ${{ vars.CI_DATABASE_SAFE_TO_MUTATE }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Require an explicitly isolated CI database
+        shell: bash
+        run: |
+          if [[ "$CI_DATABASE_SAFE_TO_MUTATE" != "true" ]]; then
+            echo "::error::Set CI_DATABASE_SAFE_TO_MUTATE=true only after configuring a dedicated Neon CI branch."
+            exit 1
+          fi
+          if [[ -z "$DATABASE_URL" || -z "$MIGRATIONS_DATABASE_URL" ]]; then
+            echo "::error::CI_DATABASE_URL and CI_MIGRATIONS_DATABASE_URL are required."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations to the CI database
+        run: pnpm --filter @hized/migrations migrate
+
+      - name: Run integration tests
+        run: pnpm test

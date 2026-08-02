@@ -53,6 +53,10 @@ export async function createOrgNode(
     validFrom?: string;
   },
 ): Promise<OrgNode> {
+  const validFrom = opts.validFrom ?? todayIso();
+  if (validFrom > todayIso()) {
+    throw new Error("Future-dated hierarchy changes are not supported yet.");
+  }
   const { rows: [node] } = await client.query(
     "insert into public.org_nodes (tenant_id, node_type, linked_user_id) values ($1, $2, $3) returning id",
     [opts.tenantId, opts.nodeType, opts.linkedUserId ?? null],
@@ -74,7 +78,7 @@ export async function createOrgNode(
       (org_node_id, tenant_id, parent_id, name, manager_user_id, path, valid_from)
      values ($1, $2, $3, $4, $5, $6, $7)
      returning *`,
-    [node.id, opts.tenantId, opts.parentId ?? null, opts.name, opts.managerUserId ?? null, path, opts.validFrom ?? todayIso()],
+    [node.id, opts.tenantId, opts.parentId ?? null, opts.name, opts.managerUserId ?? null, path, validFrom],
   );
 
   return mapRow({ ...version, org_node_id: node.id, linked_user_id: opts.linkedUserId ?? null, node_type: opts.nodeType });
@@ -102,9 +106,12 @@ export async function editOrgNode(
   },
 ): Promise<OrgNode> {
   const validFrom = opts.validFrom ?? todayIso();
+  if (validFrom !== todayIso()) {
+    throw new Error("Hierarchy edits must take effect today until scheduled/backdated reorganisation is implemented.");
+  }
 
   const { rows: [current] } = await client.query(
-    "select * from public.org_node_versions where org_node_id = $1 and valid_to is null",
+    "select * from public.org_node_versions where org_node_id = $1 and valid_to is null for update",
     [opts.orgNodeId],
   );
   if (!current) throw new Error(`Org node ${opts.orgNodeId} has no current version`);
@@ -116,10 +123,16 @@ export async function editOrgNode(
     let parentPath = "";
     if (opts.parentId) {
       const { rows: [parent] } = await client.query(
-        "select path from public.org_node_versions where org_node_id = $1 and valid_to is null",
-        [opts.parentId],
+        `select path, path <@ $2::ltree as would_create_cycle
+         from public.org_node_versions
+         where org_node_id = $1 and valid_to is null
+         for update`,
+        [opts.parentId, current.path],
       );
       if (!parent) throw new Error(`Parent org node ${opts.parentId} has no current version`);
+      if (parent.would_create_cycle) {
+        throw new Error("Cannot move an organisation node beneath itself or one of its descendants.");
+      }
       parentPath = `${parent.path}.`;
     }
     newPath = `${parentPath}${pathLabel(opts.orgNodeId)}`;
@@ -169,7 +182,9 @@ async function cascadeDescendantPaths(
 ): Promise<void> {
   const { rows: descendants } = await client.query(
     `select * from public.org_node_versions
-     where tenant_id = $1 and valid_to is null and path <@ $2::ltree and path != $2::ltree`,
+     where tenant_id = $1 and valid_to is null and path <@ $2::ltree and path != $2::ltree
+     order by nlevel(path)
+     for update`,
     [opts.tenantId, opts.oldPath],
   );
 
@@ -201,6 +216,9 @@ export async function deactivateOrgNode(
   opts: { orgNodeId: string; validFrom?: string },
 ): Promise<void> {
   const validFrom = opts.validFrom ?? todayIso();
+  if (validFrom !== todayIso()) {
+    throw new Error("Hierarchy deactivation must take effect today until scheduled/backdated changes are implemented.");
+  }
 
   const { rows: children } = await client.query(
     "select 1 from public.org_node_versions where parent_id = $1 and valid_to is null limit 1",

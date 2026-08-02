@@ -47,6 +47,9 @@ export async function withUserContext<T>(
   ctx: UserContext,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
+  if (!ctx.userId && ctx.tenantId) {
+    throw new Error("A tenant context requires an authenticated user");
+  }
   const client = await getPool().connect();
   try {
     await client.query("begin");

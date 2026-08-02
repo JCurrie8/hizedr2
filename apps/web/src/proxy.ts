@@ -32,6 +32,9 @@ export function proxy(request: NextRequest) {
   const { kind, slug } = parseHost(request.headers.get("host") ?? "");
 
   const requestHeaders = new Headers(request.headers);
+  // Never trust a client-supplied routing header. Only this proxy may derive
+  // tenant context, and getAuthContext independently validates membership.
+  requestHeaders.delete("x-tenant-slug");
   if (kind === "tenant" && slug) requestHeaders.set("x-tenant-slug", slug);
 
   // Every path under admin.* is namespaced to /platform-admin, EXCEPT the

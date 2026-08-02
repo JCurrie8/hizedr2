@@ -69,6 +69,81 @@ describe("RLS tenant isolation", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("rejects a tenant context without an authenticated user", async () => {
+    await expect(
+      withUserContext({ userId: null, tenantId: tenantA.tenantId }, (c) =>
+        c.query("select id from public.org_nodes"),
+      ),
+    ).rejects.toThrow(/requires an authenticated user/);
+  });
+
+  it("prevents self-service updates to profile identity and staff columns", async () => {
+    await expect(
+      withUserContext({ userId: tenantA.profileId }, (c) =>
+        c.query("update public.profiles set is_hized_staff = true where id = $1", [tenantA.profileId]),
+      ),
+    ).rejects.toThrow(/permission denied/);
+
+    const rowCount = await withUserContext({ userId: tenantA.profileId }, (c) =>
+      c.query("update public.profiles set full_name = 'RLS Display Name' where id = $1", [tenantA.profileId])
+        .then((result) => result.rowCount),
+    );
+    expect(rowCount).toBe(1);
+  });
+
+  it("rejects an audit event whose actor does not match the session", async () => {
+    await expect(
+      withUserContext({ userId: tenantA.profileId, tenantId: tenantA.tenantId }, (c) =>
+        c.query(
+          "insert into public.audit_log (tenant_id, actor_user_id, action) values ($1, $2, 'forged.event')",
+          [tenantA.tenantId, tenantB.profileId],
+        ),
+      ),
+    ).rejects.toThrow(/row-level security/);
+  });
+
+  it("rolls back a privileged mutation when its in-transaction audit insert fails", async () => {
+    const marker = `atomic-audit-${Date.now()}`;
+    await expect(
+      withUserContext({ userId: tenantA.profileId, tenantId: tenantA.tenantId }, async (c) => {
+        await c.query(
+          "insert into public.org_nodes (tenant_id, node_type, code) values ($1, 'team', $2)",
+          [tenantA.tenantId, marker],
+        );
+        await c.query(
+          "insert into public.audit_log (tenant_id, actor_user_id, action) values ($1, $2, 'forged.event')",
+          [tenantA.tenantId, tenantB.profileId],
+        );
+      }),
+    ).rejects.toThrow(/row-level security/);
+
+    const { rows } = await admin.query("select 1 from public.org_nodes where code = $1", [marker]);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("does not expose Hized SECURITY DEFINER helpers to PostgreSQL PUBLIC", async () => {
+    const { rows } = await admin.query(
+      `select p.proname,
+              coalesce(bool_or(a.grantee = 0 and a.privilege_type = 'EXECUTE'), false) as public_execute
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       left join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a on true
+       where n.nspname = 'public'
+         and p.proname = any($1::text[])
+       group by p.proname
+       order by p.proname`,
+      [[
+        "accept_invitation_by_token",
+        "current_user_tenant_ids",
+        "get_membership_for_slug",
+        "get_profile_for_auth_user",
+        "has_pending_invitation_by_token",
+      ]],
+    );
+    expect(rows).toHaveLength(5);
+    expect(rows.every((row) => row.public_execute === false)).toBe(true);
+  });
+
   it("cross-tenant membership listing is isolated when tenant context is set", async () => {
     const rows = await withUserContext({ userId: tenantA.profileId, tenantId: tenantA.tenantId }, (c) =>
       c.query("select tenant_id from public.tenant_memberships").then((r) => r.rows),

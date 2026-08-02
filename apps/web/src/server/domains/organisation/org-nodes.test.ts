@@ -116,13 +116,13 @@ describe("org hierarchy: create, effective-dating, move-cascade, scope", () => {
   });
 
   it("moving a node cascades new paths to its active descendants, so scope keeps matching", async () => {
-    const { deptA, deptB, team, employee } = await withUserContext({ userId: adminProfileId, tenantId }, async (c) => {
+    const { deptB, team, employee } = await withUserContext({ userId: adminProfileId, tenantId }, async (c) => {
       const company = await createOrgNode(c, { tenantId, nodeType: "company", name: "MoveCo" });
       const deptA = await createOrgNode(c, { tenantId, nodeType: "department", name: "Dept A", parentId: company.orgNodeId });
       const deptB = await createOrgNode(c, { tenantId, nodeType: "department", name: "Dept B", parentId: company.orgNodeId });
       const team = await createOrgNode(c, { tenantId, nodeType: "team", name: "Movable Team", parentId: deptA.orgNodeId });
       const employee = await createOrgNode(c, { tenantId, nodeType: "employee", name: "Along For The Ride", parentId: team.orgNodeId });
-      return { deptA, deptB, team, employee };
+      return { deptB, team, employee };
     });
 
     // Scope the manager to the team BEFORE the move.
@@ -147,6 +147,50 @@ describe("org hierarchy: create, effective-dating, move-cascade, scope", () => {
     // after the move — this is exactly what breaks without the cascade.
     const managerView = await withUserContext({ userId: managerProfileId, tenantId }, (c) => listOrgTree(c, { tenantId }));
     expect(managerView.map((n) => n.orgNodeId)).toContain(employee.orgNodeId);
+
+    const scopePaths = await withUserContext({ userId: managerProfileId, tenantId }, (c) =>
+      c.query("select unnest(public.current_user_scope_paths())::text as path").then((r) => r.rows.map((row) => row.path)),
+    );
+    expect(scopePaths).toContain(movedTeam.path);
+    expect(scopePaths).not.toContain(team.path);
+  });
+
+  it("refuses to move a node beneath its own descendant", async () => {
+    const { root, team, employee } = await withUserContext({ userId: adminProfileId, tenantId }, async (c) => {
+      const root = await createOrgNode(c, { tenantId, nodeType: "company", name: "Cycle Root" });
+      const team = await createOrgNode(c, { tenantId, nodeType: "team", name: "Cycle Team", parentId: root.orgNodeId });
+      const employee = await createOrgNode(c, {
+        tenantId,
+        nodeType: "employee",
+        name: "Cycle Employee",
+        parentId: team.orgNodeId,
+      });
+      return { root, team, employee };
+    });
+
+    await expect(
+      withUserContext({ userId: adminProfileId, tenantId }, (c) =>
+        editOrgNode(c, {
+          orgNodeId: team.orgNodeId,
+          tenantId,
+          name: team.name,
+          parentId: employee.orgNodeId,
+        }),
+      ),
+    ).rejects.toThrow(/beneath itself or one of its descendants/);
+
+    const tree = await withUserContext({ userId: adminProfileId, tenantId }, (c) => listOrgTree(c, { tenantId }));
+    expect(tree.find((node) => node.orgNodeId === team.orgNodeId)?.parentId).toBe(root.orgNodeId);
+    expect(tree.find((node) => node.orgNodeId === employee.orgNodeId)?.parentId).toBe(team.orgNodeId);
+  });
+
+  it("rejects future-dated hierarchy mutations until scheduling semantics exist", async () => {
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    await expect(
+      withUserContext({ userId: adminProfileId, tenantId }, (c) =>
+        createOrgNode(c, { tenantId, nodeType: "department", name: "Future", validFrom: tomorrow }),
+      ),
+    ).rejects.toThrow(/Future-dated/);
   });
 
   it("refuses to deactivate a node with active children, succeeds once childless", async () => {

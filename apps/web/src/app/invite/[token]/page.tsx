@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import { dbPool } from "@/server/db-pool";
+import { auth } from "@/server/domains/identity/auth";
 import { findInvitationPreview } from "@/server/domains/identity/invitations";
 import { AcceptInviteForm } from "@/components/AcceptInviteForm";
 
@@ -14,6 +16,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   }
 
   if (!invitation) notFound();
+  const session = await auth.api.getSession({ headers: await headers() });
 
   return (
     <div className="flex flex-1 items-center justify-center">
@@ -28,7 +31,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
           as {invitation.role.replace("_", " ")} — {invitation.email}
         </p>
         <div className="mt-6">
-          <AcceptInviteForm email={invitation.email} />
+          <AcceptInviteForm email={invitation.email} token={token} signedInEmail={session?.user.email ?? null} />
         </div>
       </div>
     </div>

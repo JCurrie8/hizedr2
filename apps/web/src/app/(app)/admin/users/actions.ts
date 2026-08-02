@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { withUserContext } from "@hized/db";
 import type { AppRole } from "@hized/contracts";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
-import { writeAuditLog } from "@/server/domains/access-control/audit";
+import { insertAuditLog } from "@/server/domains/access-control/audit";
 import { createInvitation } from "@/server/domains/identity/invitations";
 
 export interface InviteFormState {
@@ -36,17 +36,23 @@ export async function createInviteAction(
   if (!email) return { inviteUrl: null, error: "Email is required." };
 
   try {
-    const invitation = await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, (c) =>
-      createInvitation(c, { tenantId: ctx.tenant.id, email, role, orgNodeId, invitedBy: ctx.profileId }),
-    );
-
-    await writeAuditLog({
-      tenantId: ctx.tenant.id,
-      actorUserId: ctx.profileId,
-      action: "invitation.created",
-      targetType: "invitation",
-      targetId: invitation.invitationId,
-      metadata: { email, role },
+    const invitation = await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (c) => {
+      const created = await createInvitation(c, {
+        tenantId: ctx.tenant.id,
+        email,
+        role,
+        orgNodeId,
+        invitedBy: ctx.profileId,
+      });
+      await insertAuditLog(c, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "invitation.created",
+        targetType: "invitation",
+        targetId: created.invitationId,
+        metadata: { email, role },
+      });
+      return created;
     });
 
     revalidatePath("/admin/users");

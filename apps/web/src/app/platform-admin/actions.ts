@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
-import { writeAuditLog } from "@/server/domains/access-control/audit";
+import { insertAuditLog } from "@/server/domains/access-control/audit";
 
 async function requirePlatformAdmin() {
   const ctx = await getAuthContextFromRequest({ platformAdminRoute: true });
@@ -22,19 +22,19 @@ export async function createTenantAction(formData: FormData) {
     throw new Error("Slug can only contain lowercase letters, numbers and hyphens.");
   }
 
-  const tenant = await withUserContext({ userId: ctx.profileId }, (c) =>
-    c
-      .query("insert into public.tenants (slug, name) values ($1, $2) returning id", [slug, name])
-      .then((r) => r.rows[0]),
-  );
-
-  await writeAuditLog({
-    tenantId: tenant.id,
-    actorUserId: ctx.profileId,
-    action: "tenant.created",
-    targetType: "tenant",
-    targetId: tenant.id,
-    metadata: { name, slug },
+  await withUserContext({ userId: ctx.profileId }, async (c) => {
+    const { rows: [tenant] } = await c.query(
+      "insert into public.tenants (slug, name) values ($1, $2) returning id",
+      [slug, name],
+    );
+    await insertAuditLog(c, {
+      tenantId: tenant.id,
+      actorUserId: ctx.profileId,
+      action: "tenant.created",
+      targetType: "tenant",
+      targetId: tenant.id,
+      metadata: { name, slug },
+    });
   });
 
   revalidatePath("/");

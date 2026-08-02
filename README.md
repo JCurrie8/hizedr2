@@ -4,8 +4,9 @@ The multi-tenant Hized product (Connect · Pulse · Canvas · Advisory) — sepa
 
 Currently in **Phase 0** (tenancy, auth, organisation hierarchy, environments, CI/CD). See:
 
-- [`docs/product/blueprint.md`](docs/product/blueprint.md) — the full product blueprint (v1.1)
+- [`docs/product/blueprint.md`](docs/product/blueprint.md) — the full product blueprint (v1.3)
 - [`docs/architecture`](docs/architecture) — schema, RLS design and diagrams as they land
+- [`docs/runbooks/ci-cd.md`](docs/runbooks/ci-cd.md) — required checks, isolated CI database, and Vercel deployment flow
 
 ## Stack
 
