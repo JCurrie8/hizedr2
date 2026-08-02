@@ -24,7 +24,7 @@ export function LoginForm() {
           setError(signInError.message ?? "Could not sign in.");
           return;
         }
-        router.push("/dashboard");
+        router.push("/organisations");
         router.refresh();
       }}
     >

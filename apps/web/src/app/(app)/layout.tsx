@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { SignOutButton } from "@/components/SignOutButton";
 
@@ -8,6 +9,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (ctx.kind === "unauthenticated") redirect("/login");
 
   if (ctx.kind === "forbidden") {
+    const requestHeaders = await headers();
+    if (!requestHeaders.get("x-tenant-slug")) redirect("/organisations");
+
     return (
       <div className="flex flex-1 items-center justify-center">
         <div className="max-w-md px-8 text-center">

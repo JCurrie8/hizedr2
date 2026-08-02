@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.4 |
+| Document status | Build-ready product definition — Version 1.5 |
 
 ### Changes since v1.0
 
@@ -45,6 +45,10 @@ This specification is designed to be handed to an AI software builder, technical
 - **Demo data delivery made progressive.** EPIC-01 seeds two isolated tenant shells and an installation/service organisation hierarchy without inventing schemas for later products. Connect, Pulse and Canvas extend that same synthetic story with jobs and pipeline health, KPIs and target/freshness states, and a promoted board as their owning epics land.
 - **Environment separation made operationally explicit.** Development and CI database-mutating tests must use Neon branches separate from production; a production demo seed is an explicit release operation, not a test fixture.
 - **Tenant context is membership-bound in RLS.** The server still resolves identity and membership before setting session context, but ordinary tenant reads also require that the session user has active access to the selected tenant, so a future server-side context-pairing defect fails closed at the database boundary.
+
+### Changes since v1.4
+
+- **Tenant entry and switching clarified.** After signup or login, an authenticated user is resolved to their active organisation memberships before entering a tenant. A single membership may open directly; multiple memberships require an organisation chooser. Canonical production navigation uses `*.hized.com`; development and preview deployments may use a path-based routing fallback, but both paths must pass the same membership check and RLS context gate.
 
 ## 1. Product definition and positioning
 
@@ -385,6 +389,8 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 ### 9.2 Multi-tenancy
 
 - Every request and persisted record is tenant-scoped.
+- Signup and login land on an authenticated organisation-resolution step rather than assuming a tenant from the apex hostname. Single-membership users may continue directly; multi-membership users can explicitly choose or switch organisation.
+- Tenant subdomains are the canonical production URL. A development/preview path fallback is permitted only as routing metadata and must be revalidated against the caller's active membership exactly like a hostname-derived slug.
 - Tenant isolation is enforced primarily through Postgres Row-Level Security policies keyed on TenantId, not solely through application-layer checks. The session context those policies read is set by trusted server-side code once per request, immediately after verifying the caller's identity — not derived from anything client-supplied.
 - For early clients, use a shared application with strong logical isolation; support dedicated infrastructure (a separate database) as an enterprise option.
 - No client can enumerate or infer another tenant's users, data, identifiers, exports or logs.
