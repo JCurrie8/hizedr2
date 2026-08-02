@@ -1,7 +1,12 @@
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
-import { listConnectorOverview } from "@/server/domains/connectors/connectors";
+import {
+  listConnectorOverview,
+  listManualFilePipelines,
+  listRecentPipelineRuns,
+} from "@/server/domains/connectors/connectors";
 import { createManualFilePipelineAction } from "./actions";
+import { ManualUploadForm } from "./ManualUploadForm";
 
 const connectorLabels: Record<string, string> = {
   file_upload: "CSV / Excel",
@@ -18,8 +23,13 @@ export default async function ConnectPage() {
     return <div className="mx-auto w-full max-w-4xl px-6 py-10 text-sm text-muted">Connect is available to company admins and analysts.</div>;
   }
 
-  const connectors = await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, (client) =>
-    listConnectorOverview(client, { tenantId: ctx.tenant.id }),
+  const { connectors, filePipelines, recentRuns } = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => ({
+      connectors: await listConnectorOverview(client, { tenantId: ctx.tenant.id }),
+      filePipelines: await listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
+      recentRuns: await listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
+    }),
   );
 
   return (
@@ -29,7 +39,7 @@ export default async function ConnectPage() {
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-teal-deep">Hized Connect</p>
           <h1 className="mt-2 font-display text-3xl font-bold text-ink">Data pipelines</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted">
-            Bring files and operational systems into one monitored, tenant-isolated ingestion path.
+            Add the files and operational systems your business already uses. Each source runs independently through one monitored, tenant-isolated ingestion path.
           </p>
         </div>
         <div className="rounded-md border border-line bg-panel px-4 py-3 text-right">
@@ -38,11 +48,12 @@ export default async function ConnectPage() {
         </div>
       </div>
 
-      <section className="mt-8 grid gap-4 md:grid-cols-3">
+      <section className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           ["Files", "CSV and Excel uploads; SharePoint revisions are next."],
           ["Salesforce", "SystemModstamp watermark with a 24-hour replay window."],
           ["Zendesk", "Cursor-based incremental tickets and service data."],
+          ["Custom ETL", "A paid, Hized-managed route for legacy systems, bespoke APIs and advanced transformation rules."],
         ].map(([title, description]) => (
           <div key={title} className="rounded-lg border border-line bg-panel p-4">
             <h2 className="font-display text-lg font-semibold text-ink">{title}</h2>
@@ -73,6 +84,34 @@ export default async function ConnectPage() {
           </label>
           <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Create</button>
         </form>
+      </section>
+
+      <section className="mt-8 rounded-lg border border-line bg-panel p-5">
+        <h2 className="font-display text-lg font-semibold text-ink">Upload and run</h2>
+        <p className="mt-1 text-sm text-muted">
+          Files go directly to private object storage, then Hized verifies their size and SHA-256 hash before parsing or loading rows.
+        </p>
+        {filePipelines.length > 0
+          ? <ManualUploadForm pipelines={filePipelines.map(({ id, name, loadMode }) => ({ id, name, loadMode }))} />
+          : <p className="mt-4 text-sm text-muted">Create a manual file pipeline before uploading a file.</p>}
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Recent runs</h2>
+        <div className="mt-3 overflow-hidden rounded-lg border border-line bg-panel">
+          {recentRuns.map((run) => (
+            <div key={run.id} className="grid gap-2 border-b border-line px-4 py-3 last:border-b-0 md:grid-cols-[2fr_1fr_1fr_1fr] md:items-center">
+              <div>
+                <div className="font-medium text-ink">{run.pipelineName}</div>
+                <time className="text-xs text-muted" dateTime={run.queuedAt}>{new Date(run.queuedAt).toLocaleString("en-GB")}</time>
+              </div>
+              <div className="font-mono text-xs uppercase text-muted">{run.status}</div>
+              <div className="text-sm text-muted">{run.rowsAccepted} accepted</div>
+              <div className="text-sm text-muted">{run.rowsRejected} quarantined</div>
+            </div>
+          ))}
+          {recentRuns.length === 0 && <div className="px-4 py-8 text-center text-sm text-muted">No pipeline runs yet.</div>}
+        </div>
       </section>
 
       <section className="mt-8">

@@ -14,9 +14,9 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 **This repo** (`hized-platform`) is the actual multi-tenant Hized product. It is separate from `hized-web` (the marketing site, github.com/JCurrie8/Hized, deployed to hized.com) — do not confuse the two or edit one expecting it to affect the other.
 
-**Stack**: Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth (self-hosted, no bundled vendor) + Cloudflare R2 (object storage; provisioned, upload transfer not wired yet) + Vercel. pnpm + Turborepo monorepo.
+**Stack**: Next.js (App Router, TypeScript) + Neon (Postgres) + Better Auth (self-hosted, no bundled vendor) + Cloudflare R2 (private object storage with direct signed browser upload) + Vercel. pnpm + Turborepo monorepo.
 
-**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.7) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
+**Product spec**: [`docs/product/blueprint.md`](docs/product/blueprint.md) (v1.8) is the source of truth for scope and requirements — read it before assuming what a feature should do. It includes a Platform Administration section (7) and MVP delivery phases (11.4).
 
 **Deployment**:
 - Marketing site → Vercel project `hized` → `hized.com` / `www.hized.com` (live, working, has real email forwarding via MX/TXT records at the registrar — do not touch this domain's DNS carelessly).
@@ -26,7 +26,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 - [x] Repo scaffold, Hized design tokens ported into Tailwind
 - [x] Neon + Better Auth + R2 provisioned
-- [x] Core schema & migrations (`db/migrations/`, migrations 0001–0015 applied to both production and `vercel-dev` as of 2026-08-02)
+- [x] Core schema & migrations (`db/migrations/`, migrations 0001–0016 applied to both production and `vercel-dev` as of 2026-08-02)
 - [x] RLS policies + helper functions (`packages/testing/src/rls.test.ts`)
 - [x] Auth integration — invitation signup/acceptance is bound to the single-use token and invited account email, including an existing user joining another tenant; MFA (TOTP) plugin wired server-side but **not yet enforced or given an enrollment UI**
 - [x] Tenant resolution & app shell — subdomain middleware (`apps/web/src/proxy.ts` — Next.js 16 renamed `middleware.ts`; must live under `src/` given this project uses `--src-dir`), authenticated organisation landing/selection, a membership-validated Vercel/localhost path fallback, and login/invite/platform-admin pages
@@ -35,7 +35,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - [x] CI/CD merge gate — the workflow uses a dedicated Neon `ci` branch with separate owner/runtime secrets and a mutation guard. Protected `main` requires both hosted checks, an up-to-date branch, resolved conversations, and applies the rules to administrators. PR #1 passed and deployed to Vercel production. A gated staging/production schema-release path remains deliberately operator-driven per `docs/runbooks/ci-cd.md`.
 - [~] Demo tenant seeding & EPIC-01 walkthrough — guarded/idempotent seed tooling and two production demo hierarchies exist; restricted-role verification proves 12/6 own nodes and zero cross-tenant nodes. Northstar login and tenant entry are verified in production after PR #2; accepting the existing Harbour invitation and checking the tenant switch remain.
 - [~] Security hardening & Phase 0 exit review — the 2026-08-02 review findings are fixed and covered by integration tests; the broader exit review remains
-- [~] EPIC-04/05 Connect vertical slice — tenant-scoped connector/pipeline/batch/run/checkpoint schema and RLS tests exist in migration `0015`; the first `/admin/connect` inventory/configuration surface, Salesforce/Zendesk incremental planning contracts, and shared CSV/XLSX parser are built. Next: R2 upload transfer, persisted parsing/validation runs, SharePoint Graph reconciliation, and provider authentication/extraction.
+- [~] EPIC-04/05 Connect vertical slice — tenant-scoped connector/pipeline/batch/run/checkpoint schema and RLS tests exist in migration `0015`; direct signed CSV/XLSX upload to private R2, server-side hash/metadata verification, landed/validated/curated persistence, duplicate suppression, failed-run visibility and retryable attempts are built. The first `/admin/connect` operating surface and Salesforce/Zendesk incremental planning contracts are also present. Next: SharePoint Graph reconciliation, then live Salesforce/Zendesk authentication/extraction, followed by the governed dataset/KPI/Pulse thin slice rather than open-ended connector breadth.
 
 **Known gaps / deliberately deferred (not oversights — don't "fix" without checking why first)**:
 - MFA enrollment UI + enforcement — plugin exists, nothing requires it yet.
@@ -43,7 +43,7 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - Resend/email is skipped entirely — invite links are shown/copied in the admin UI (`/admin/users`), never emailed. This was an explicit user decision to avoid a paid dependency pre-revenue.
 - Blueprint section 7.5: PLATFORM-005 (cross-tenant health aggregation) and PLATFORM-006 ("view as" impersonation) are explicitly out of scope for MVP.
 - CI is an active required merge gate backed by its own persistent Neon `ci` branch. The CI database is intentionally disposable, while staging/production schema releases remain operator-gated; follow `docs/runbooks/ci-cd.md` before introducing a migration.
-- Local owner/runtime URLs now point to the separate Neon `vercel-dev` branch, which has migrations 0001–0015 and its own restricted `app_user`. The production branch is no longer the default target for local integration tests.
+- Local owner/runtime URLs now point to the separate Neon `vercel-dev` branch, which has migrations 0001–0016 and its own restricted `app_user`. The production branch is no longer the default target for local integration tests.
 - The first tabular parser intentionally accepts `.csv` and modern `.xlsx`; legacy binary `.xls`, encrypted workbooks, macros and multi-sheet mapping UI are not silently guessed. SharePoint/Forms and manual upload will use the same parser, with an explicit sheet selection where required.
 
 **RLS notes — read before adding or changing a policy**:
@@ -58,6 +58,12 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - A fourth isolation weakness was found by the EPIC-01 production verifier: a genuine profile paired by trusted server code with a tenant it did not belong to could read that tenant's `tenant_memberships`, `org_nodes`, and `invitations`, because those SELECT policies trusted `current_tenant_id()` without independently checking active membership. No client-controlled path around `getAuthContext()` was found, but migration `0014` now binds those reads to `current_user_has_tenant_access()` so a future server context-pairing bug fails closed at RLS too.
 
 ## Session Log
+
+### 2026-08-02 — Codex (direct file ingestion + SME/Custom ETL boundary)
+
+Completed the first end-to-end Connect run path. Company admins and analysts can create multiple independent file pipelines, upload bounded CSV/XLSX files directly to private R2 with a short-lived signed PUT, and finalise them through tenant-scoped server actions. R2 retains signed tenant/pipeline/hash metadata; the server verifies metadata, byte length and a recomputed SHA-256 before parsing. Snapshot, append and key-based upsert modes now persist immutable source batches, landed rows, quarantined-key validations, curated records, step status, row counts and audited completion/failure events. Unchanged file revisions are idempotent and redundant exact R2 objects are removed. The production bucket CORS policy is reproducible and live preflight tests pass for the Vercel origin and `*.hized.com` tenant origins.
+
+Found and corrected a run-model bug in migration 0015: `unique (pipeline_id, source_batch_id)` made the declared retry trigger impossible and could make a failed upload look like a successful duplicate. Migration `0016_allow_pipeline_run_retries.sql` removes that constraint, adds the lookup index, and the application serialises concurrent batch processing with a transaction advisory lock while deduplicating only completed runs. Migration 0016 is applied and verified on both `vercel-dev` and production Neon. Updated the blueprint to v1.8 and Connect UI to treat SME multi-source data as normal and to distinguish paid Hized-managed Custom ETL from standard connectors without promising a self-service join/code studio. Verification passes 44 web tests, 19 RLS tests, migration tests, typecheck, lint and the production build. Next build sequence: SharePoint/Forms revision ingestion, Salesforce/Zendesk provider auth/extraction, then governed datasets/KPIs and a real Northstar Pulse dashboard.
 
 ### 2026-08-02 — Codex (Connect files + CRM foundation)
 
