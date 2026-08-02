@@ -2,6 +2,12 @@
 
 Hized uses GitHub Actions for required verification and the existing Vercel Git integration for deployment. Pull requests run lint, typechecking, a production build, all migrations, and the database integration suites. A merge to `main` is then deployed by Vercel.
 
+## Provisioned state (2026-08-02)
+
+- Neon branch `ci` is the persistent, disposable database used only by GitHub Actions.
+- `CI_MIGRATIONS_DATABASE_URL`, `CI_DATABASE_URL`, and `CI_DATABASE_SAFE_TO_MUTATE=true` are configured in the GitHub repository.
+- Protected-main enforcement is still pending; do not describe the workflow as a required merge gate until both checks are required in repository settings.
+
 ## One-time repository configuration
 
 1. Create a dedicated Neon branch/database for CI. It must not be development, staging, or production.
