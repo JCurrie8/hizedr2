@@ -49,13 +49,13 @@ export function proxy(request: NextRequest) {
   if (pathTenant) {
     requestHeaders.set("x-tenant-slug", pathTenant[1]);
     const url = request.nextUrl.clone();
-    url.pathname = pathTenant[2] || "/dashboard";
+    url.pathname = pathTenant[2] || "/home";
     return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
   }
 
   // The public apex is an application entry point, not a marketing or
   // placeholder page. The organisations route resolves the signed-in user
-  // and selects their tenant; a tenant hostname can enter Pulse directly.
+  // and selects their tenant; a tenant hostname enters the product hub.
   if (request.nextUrl.pathname === "/" && kind === "apex") {
     const url = request.nextUrl.clone();
     url.pathname = "/organisations";
@@ -63,7 +63,7 @@ export function proxy(request: NextRequest) {
   }
   if (request.nextUrl.pathname === "/" && kind === "tenant") {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = "/home";
     return NextResponse.redirect(url);
   }
 

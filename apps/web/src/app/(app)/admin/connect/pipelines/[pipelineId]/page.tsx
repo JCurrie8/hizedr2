@@ -4,6 +4,8 @@ import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { getPipelineBuilderConfiguration } from "@/server/domains/connectors/pipeline-configuration";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
+import { hasProductAccess } from "@/server/domains/products/entitlements";
+import { redirect } from "next/navigation";
 import { savePipelineConfigurationAction } from "./actions";
 
 const typeOptions = [
@@ -25,12 +27,16 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const [configuration, requestHeaders] = await Promise.all([
     withUserContext(
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
-      (client) => getPipelineBuilderConfiguration(client, { tenantId: ctx.tenant.id, pipelineId }),
+      async (client) => {
+        if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
+        return getPipelineBuilderConfiguration(client, { tenantId: ctx.tenant.id, pipelineId });
+      },
     ),
     headers(),
   ]);
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
+  if (!configuration) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
   const connectHref = tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/admin/connect" });
   const saveAction = savePipelineConfigurationAction.bind(null, configuration.id);
 
