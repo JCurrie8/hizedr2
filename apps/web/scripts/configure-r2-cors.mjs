@@ -25,7 +25,8 @@ const desiredRules = [
   {
     AllowedOrigins: [
       "https://hized-platform.vercel.app",
-      "https://*.hized.com",
+      "https://hized.app",
+      "https://*.hized.app",
       "http://localhost:3000",
       "http://localhost:3001",
     ],

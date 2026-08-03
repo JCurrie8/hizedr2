@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.8 |
+| Document status | Build-ready product definition — Version 2.0 |
 
 ### Changes since v1.0
 
@@ -48,7 +48,7 @@ This specification is designed to be handed to an AI software builder, technical
 
 ### Changes since v1.4
 
-- **Tenant entry and switching clarified.** After signup or login, an authenticated user is resolved to their active organisation memberships before entering a tenant. A single membership may open directly; multiple memberships require an organisation chooser. Canonical production navigation uses `*.hized.com`; development and preview deployments may use a path-based routing fallback, but both paths must pass the same membership check and RLS context gate.
+- **Tenant entry and switching clarified.** After signup or login, an authenticated user is resolved to their active organisation memberships before entering a tenant. A single membership may open directly; multiple memberships require an organisation chooser. Canonical production navigation uses `*.hized.app`; development and preview deployments may use a path-based routing fallback, but both paths must pass the same membership check and RLS context gate.
 
 ### Changes since v1.5
 
@@ -61,6 +61,16 @@ This specification is designed to be handed to an AI software builder, technical
 ### Changes since v1.7
 
 - **The SME multi-source and Custom ETL boundary is explicit.** A tenant can operate several ordinary connectors and pipelines at once because small and mid-sized companies normally spread operational truth across finance, CRM, service, workforce and recurring spreadsheets. Hized Connect does not need a universal self-serve join canvas for MVP: reusable governed transformations reconcile those feeds. Sources or business rules outside the standard adapters are delivered as paid, Hized-managed Custom ETL work, but must still use the same tenant isolation, secrets, lineage, validation and run-monitoring contracts as packaged connectors.
+
+### Changes since v1.8
+
+- **Microsoft connector authentication and observation semantics clarified.** SharePoint/OneDrive uses multi-tenant delegated Microsoft OAuth with offline access, encrypted refresh-token storage and a stable callback; Graph access remains limited to the connected account and selected Hized sources. Delta reports current drive state rather than guaranteeing recoverable content for every edit between polls, so revision history records every content revision Hized actually observes. A cumulative Forms workbook still captures intervening responses on the next upsert even when several edits occurred between observations.
+
+### Changes since v1.9
+
+- **The platform production domain is `hized.app`.** The apex hosts shared authentication and OAuth callbacks; tenant applications use `*.hized.app`. `hized.com` remains the separate marketing site.
+- **Connect is analyst-operated and adapter-neutral.** Company administrators authorise organisational connections and secrets; authorised analysts configure repeatable pipelines through a guided source, fields, load, validation, schedule and review flow. Salesforce and Zendesk are reference implementations of CRM/API adapter patterns, not an exhaustive connector promise.
+- **Hized-managed SQL is the default analytical destination.** CSV, Excel, Forms, SharePoint, CRM and API data are source deliveries into tenant-isolated governed storage. A customer does not need to operate SQL Server to use Hized; customer-owned SQL/warehouse extraction and paid Custom ETL remain supported integration options.
 
 ## 1. Product definition and positioning
 
@@ -228,7 +238,7 @@ Every important metric should be represented as a governed KPI definition rather
 
 ### 5.1 Purpose
 
-Hized Connect provides a repeatable, observable route from client systems to a trusted analytical model. The MVP should prioritise reliable CSV/Excel and SharePoint ingestion plus the named SQL and CRM adapters needed by early customers, rather than attempting a large connector marketplace.
+Hized Connect provides a repeatable, observable route from client systems to a trusted analytical model. The MVP prioritises reliable CSV/Excel and SharePoint ingestion plus reusable database and API/CRM adapter patterns chosen by early-customer evidence, rather than promising a large named connector marketplace.
 
 ### 5.2 Connector framework
 
@@ -239,13 +249,15 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-003 | Support CSV and Excel file ingestion from upload or managed folder. | Must | Files can be mapped, validated and loaded with a repeatable schema. |
 | CONN-004 | Provide a generic REST API connector with pagination, authentication and rate-limit handling. | Should | An administrator can configure a common JSON API without custom code. |
 | CONN-005 | Provide a connector SDK or adapter interface. | Should | New sources can be added without modifying the core orchestration engine. |
-| CONN-006 | Monitor selected Excel files or folders in SharePoint Online / OneDrive for Business, including Microsoft Forms response workbooks. | Must | Multiple workbook updates per day create distinct, traceable source revisions and pipeline runs without duplicate ingestion from retries or repeated notifications. |
-| CONN-007 | Provide first-class Salesforce and Zendesk adapters on a reusable CRM connector contract; allow HubSpot and Dynamics 365 adapters without changing orchestration. | Must | An administrator can discover supported objects/resources, select fields, test access and run an incremental extract through the same pipeline monitoring surface. |
+| CONN-006 | Monitor selected Excel files or folders in SharePoint Online / OneDrive for Business, including Microsoft Forms response workbooks. | Must | Every changed content revision observed by Hized creates a distinct, traceable source revision and pipeline run without duplicate ingestion from retries or repeated notifications; cumulative Forms responses are not lost when several edits occur between polls. |
+| CONN-007 | Provide a reusable CRM/API adapter contract, with Salesforce and Zendesk as reference implementations and HubSpot, Dynamics 365 or other sources able to use the same orchestration. | Must | An authorised operator can discover supported objects/resources, select fields, test access and run an incremental extract through the same pipeline monitoring surface; the product does not imply that only named examples are supported. |
 | CONN-008 | Persist source-specific incremental checkpoints with an optional overlap window and idempotent upsert key. | Must | A delayed, failed or retried CRM run neither misses records nor duplicates previously loaded records; checkpoints advance only after a successful complete run. |
 | CONN-009 | Support several connectors and pipelines per tenant without implying that every feed must be combined. | Must | A company can ingest finance, CRM, service and spreadsheet feeds independently, then select only the sources needed by each governed dataset/KPI. |
 | CONN-010 | Provide a Hized-managed Custom ETL delivery path for unsupported sources and bespoke cross-source rules. | Should | A custom implementation is commercially distinguishable from standard Connect, versioned and supportable, but its credentials, source batches, validations, retries, lineage and run health remain visible through the ordinary Connect operating surface. |
 
 ### 5.3 Pipeline capabilities
+
+Connections and pipelines are separate concepts. A Company Admin authorises a connection and its credentials. A Company Admin or Analyst can then configure one or more pipelines over permitted source objects/files without seeing stored secrets. The guided setup sequence is source selection, schema discovery, field mapping/types, load behaviour and keys, validation, schedule/test, then an audited versioned save. This is configuration-first rather than a drag-and-drop ETL canvas.
 
 - Full and incremental extraction using watermark columns, timestamps, IDs or source change tracking.
 - Salesforce defaults to `SystemModstamp` (or the platform replication fallback where unavailable), a stable record ID upsert key, and a configurable rolling overlap such as the previous 24 hours. Small extracts can use REST pagination; high-volume extracts can use Bulk API 2.0 without changing downstream run semantics.
@@ -253,8 +265,11 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 - Configurable schedules with tenant time zone support.
 - Idempotent loads and safe retry behaviour.
 - SharePoint/OneDrive change tracking uses stable drive/item identifiers and a persisted delta cursor; change notifications may trigger faster reconciliation but never replace the delta scan. Downloaded content is hashed so repeated Graph notifications, retries and metadata-only changes cannot duplicate a load.
+- Microsoft authorization uses the OAuth authorization-code flow with PKCE and offline access. Refresh tokens are authenticated-encrypted in application code before Postgres, bound to their tenant and connector, never returned to the browser, and re-encrypted when Microsoft rotates them. OAuth client secrets and encryption keys live only in the deployment secret store.
+- SharePoint/OneDrive polling must be configurable frequently enough for the source's operating rhythm (for example every 15–60 minutes for an actively updated Forms workbook). Graph delta exposes the latest observed drive state; Hized must not claim it captured an intermediate workbook content revision that was never downloaded.
 - Cumulative Forms workbooks support a configured stable response key and upsert semantics, so re-reading the latest workbook adds or updates responses rather than appending the full sheet again.
 - Raw landing, staging and curated transformation layers.
+- Hized-managed tenant-isolated SQL is the standard landing/curated destination for every adapter. A source workbook or form remains a delivery mechanism, not the long-term reporting database; a customer-owned SQL Server or warehouse is optional rather than a prerequisite.
 - Data type mapping, column renaming, filtering, joins, calculated fields and deduplication.
 - Validation rules for nulls, uniqueness, ranges, accepted values, referential integrity and row-count variance.
 - Quarantine area for rejected rows with reason codes and reprocessing.
@@ -277,7 +292,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 
 ### 5.5 Standard Connect vs Custom ETL
 
-- **Standard Connect** covers packaged file, database, SharePoint and named SaaS adapters plus configuration that can be safely repeated across customers.
+- **Standard Connect** covers packaged file, database, SharePoint and reusable SaaS/API adapter patterns plus configuration that can be safely repeated across customers. Named products such as Salesforce and Zendesk demonstrate those patterns; priority follows real customer demand.
 - **Custom ETL** covers unsupported/legacy systems, unusual authentication or pagination, client-specific matching rules, and transformations that reconcile several systems using business knowledge discovered during implementation.
 - Custom ETL is a paid managed-service deliverable, not an ungoverned code bypass. Custom jobs run through the same pipeline/run tables and operational screens, and never receive a broad database or RLS exemption.
 - Repeated custom work should graduate into a reusable adapter or transformation template only after it is proven across customers. The platform should not promise a connector marketplace before that evidence exists.
@@ -502,7 +517,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Multi-tenant tenant and user administration, including platform-admin-driven tenant provisioning (PLATFORM-001/002).
 - Authentication plus role and organisation-scope permissions.
 - Organisation hierarchy with effective dates and employee assignments.
-- SQL Server/Azure SQL, Salesforce and Zendesk connectors; manual CSV/Excel ingestion; and monitored SharePoint Online / OneDrive Excel sources including Forms response workbooks. HubSpot and Dynamics 365 use the same adapter contract as follow-on connectors.
+- Manual CSV/Excel ingestion; monitored SharePoint Online / OneDrive Excel sources including Forms response workbooks; SQL Server/Azure SQL extraction where customers already have it; and reusable CRM/API adapters selected by pilot demand. Salesforce and Zendesk are reference implementations, while HubSpot, Dynamics 365 and other systems use the same contract.
 - Multiple independent sources per tenant and Hized-delivered Custom ETL for unsupported sources or bespoke reconciliation, without an MVP promise of self-service arbitrary code.
 - Scheduled full and watermark-based incremental pipelines.
 - Raw, staging and curated structures with run logs and validation results.

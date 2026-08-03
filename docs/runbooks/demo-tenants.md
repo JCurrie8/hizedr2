@@ -35,7 +35,7 @@ pnpm --filter @hized/migrations verify-demo
 Seed production deliberately and create administrator invitations:
 
 ```powershell
-pnpm --filter @hized/migrations seed-demo -- --target production --confirm-production --admin-email you@example.com --base-url https://hized-platform.vercel.app
+pnpm --filter @hized/migrations seed-demo -- --target production --confirm-production --admin-email you@example.com --base-url https://hized.app
 ```
 
 Only invitation hashes are persisted. Copy each displayed link when it is created. If a valid pending invitation already exists, the script will not replace it; use `--rotate-invites` explicitly to revoke pending links and issue new ones.

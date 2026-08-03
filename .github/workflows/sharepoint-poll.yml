@@ -1,0 +1,33 @@
+name: SharePoint poll
+
+on:
+  schedule:
+    # Offset from the top of the hour to reduce hosted-runner congestion.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hized-production-sharepoint-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    name: Poll due Microsoft workbooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CRON_SECRET: ${{ secrets.PRODUCTION_CRON_SECRET }}
+    steps:
+      - name: Invoke the protected production poller
+        shell: bash
+        run: |
+          if [[ -z "$CRON_SECRET" ]]; then
+            echo "PRODUCTION_CRON_SECRET is not configured; polling remains inactive."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error --max-time 360 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            https://hized.app/api/cron/sharepoint

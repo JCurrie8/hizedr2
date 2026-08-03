@@ -55,8 +55,8 @@ export function tenantAppUrl(opts: { slug: string; host: string; protocol?: stri
   const protocol = opts.protocol === "http" ? "http" : "https";
   const path = opts.path.startsWith("/") ? opts.path : `/${opts.path}`;
 
-  if (hostname === "hized.com" || hostname.endsWith(".hized.com")) {
-    return `${protocol}://${opts.slug}.hized.com${path}`;
+  if (hostname === "hized.app" || hostname.endsWith(".hized.app")) {
+    return `${protocol}://${opts.slug}.hized.app${path}`;
   }
 
   return `/t/${encodeURIComponent(opts.slug)}${path}`;

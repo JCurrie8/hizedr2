@@ -86,6 +86,26 @@ export async function createR2Upload(input: {
   };
 }
 
+export async function uploadR2Object(input: {
+  key: string;
+  bytes: Uint8Array;
+  contentType: string;
+  metadata: UploadMetadata;
+}): Promise<void> {
+  await getClient().send(new PutObjectCommand({
+    Bucket: getBucket(),
+    Key: input.key,
+    Body: input.bytes,
+    ContentLength: input.bytes.byteLength,
+    ContentType: input.contentType,
+    Metadata: {
+      "tenant-id": input.metadata.tenantId,
+      "pipeline-id": input.metadata.pipelineId,
+      sha256: input.metadata.contentSha256,
+    },
+  }));
+}
+
 export async function verifyR2Upload(input: {
   key: string;
   sizeBytes: number;

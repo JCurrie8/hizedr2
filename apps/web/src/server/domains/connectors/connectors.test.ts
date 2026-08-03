@@ -7,6 +7,7 @@ import {
   persistManualFileFailure,
   persistManualFileRun,
 } from "./connectors";
+import { getPipelineBuilderConfiguration, savePipelineBuilderConfiguration } from "./pipeline-configuration";
 
 describe("manual file pipeline persistence", () => {
   const admin = getAdminPool();
@@ -81,6 +82,51 @@ describe("manual file pipeline persistence", () => {
         },
       });
       expect(duplicate).toMatchObject({ runId: result.runId, duplicate: true });
+
+      const saved = await savePipelineBuilderConfiguration(client, {
+        tenantId: fixture.tenantId,
+        pipelineId: pipeline.id,
+        actorUserId: fixture.profileId,
+        name: "Governed form responses",
+        loadMode: "upsert",
+        keyColumns: ["response_id"],
+        fieldMappings: [
+          { sourceField: "Response ID", targetField: "response_id", dataType: "string", isIncluded: true, isRequired: true, position: 0 },
+          { sourceField: "Score", targetField: "score", dataType: "integer", isIncluded: true, isRequired: false, position: 1 },
+        ],
+        pollIntervalMinutes: null,
+        changeNote: "Use governed field names and types",
+      });
+      expect(saved.versionNumber).toBe(1);
+      const configured = await getManualFilePipeline(client, { tenantId: fixture.tenantId, pipelineId: pipeline.id });
+      const configuredRun = await persistManualFileRun(client, {
+        tenantId: fixture.tenantId,
+        actorUserId: fixture.profileId,
+        pipeline: configured,
+        fileName: "responses.xlsx",
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        contentSha256: "f".repeat(64),
+        sizeBytes: 100,
+        storageKey: `${fixture.tenantId}/connect/test/responses-v2.xlsx`,
+        sourceModifiedAt: "2026-08-02T12:10:00.000Z",
+        table: {
+          sourceName: "responses.xlsx",
+          sheetName: "Form1",
+          headers: ["Response ID", "Score"],
+          rows: [{ "Response ID": "a", Score: "9" }, { "Response ID": "b", Score: 10 }],
+        },
+      });
+      expect(configuredRun).toMatchObject({ acceptedRows: 2, rejectedRows: 0 });
+      const { rows: curated } = await client.query(
+        "select data from public.curated_records where pipeline_id = $1 order by data ->> 'response_id'",
+        [pipeline.id],
+      );
+      expect(curated.map((row) => row.data)).toEqual([
+        { response_id: "a", score: 9 },
+        { response_id: "b", score: 10 },
+      ]);
+      const builder = await getPipelineBuilderConfiguration(client, { tenantId: fixture.tenantId, pipelineId: pipeline.id });
+      expect(builder).toMatchObject({ name: "Governed form responses", versionNumber: 1, keyColumns: ["response_id"] });
     });
   });
 
