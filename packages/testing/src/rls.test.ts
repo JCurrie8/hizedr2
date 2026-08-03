@@ -17,6 +17,9 @@ describe("RLS tenant isolation", () => {
   let connectorBId: string;
   let connectorEmployeeId: string;
   let pipelineAId: string;
+  let pipelineBId: string;
+  let mappingAId: number;
+  let mappingBId: number;
 
   beforeAll(async () => {
     tenantA = await createTenantWithUser(admin, {
@@ -61,6 +64,27 @@ describe("RLS tenant isolation", () => {
       [tenantA.tenantId, connectorAId, tenantA.profileId],
     );
     pipelineAId = pipelineA.id;
+    const { rows: [pipelineB] } = await admin.query(
+      `insert into public.pipelines
+         (tenant_id, connector_id, name, load_mode, key_columns, created_by)
+       values ($1, $2, 'Salesforce contacts', 'upsert', array['Id'], $3) returning id`,
+      [tenantB.tenantId, connectorBId, tenantB.profileId],
+    );
+    pipelineBId = pipelineB.id;
+    const { rows: [mappingA] } = await admin.query(
+      `insert into public.pipeline_field_mappings
+         (tenant_id, pipeline_id, source_field, target_field, position)
+       values ($1, $2, 'Id', 'account_id', 0) returning id`,
+      [tenantA.tenantId, pipelineAId],
+    );
+    mappingAId = Number(mappingA.id);
+    const { rows: [mappingB] } = await admin.query(
+      `insert into public.pipeline_field_mappings
+         (tenant_id, pipeline_id, source_field, target_field, position)
+       values ($1, $2, 'Id', 'contact_id', 0) returning id`,
+      [tenantB.tenantId, pipelineBId],
+    );
+    mappingBId = Number(mappingB.id);
   });
 
   afterAll(async () => {
@@ -319,6 +343,44 @@ describe("RLS tenant isolation", () => {
         (c) => c.query("select id, tenant_id from public.connectors order by id").then((r) => r.rows),
       );
       expect(rowsB).toEqual([{ id: connectorBId, tenant_id: tenantB.tenantId }]);
+    } finally {
+      await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [
+        tenantB.tenantId,
+        tenantA.profileId,
+      ]);
+    }
+  });
+
+  it("pipeline mappings and immutable versions remain scoped to the selected tenant", async () => {
+    await admin.query(
+      "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'analyst', 'active')",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    try {
+      await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        async (client) => {
+          const { rows: mappings } = await client.query("select id from public.pipeline_field_mappings order by id");
+          expect(mappings).toEqual([{ id: String(mappingAId) }]);
+          await client.query(
+            `insert into public.pipeline_config_versions
+               (tenant_id, pipeline_id, version_number, configuration, created_by)
+             values ($1, $2, 1, '{"loadMode":"upsert"}'::jsonb, $3)`,
+            [tenantA.tenantId, pipelineAId, tenantA.profileId],
+          );
+        },
+      );
+
+      const mappingsB = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantB.tenantId },
+        (client) => client.query("select id from public.pipeline_field_mappings order by id").then((result) => result.rows),
+      );
+      expect(mappingsB).toEqual([{ id: String(mappingBId) }]);
+
+      await expect(withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query("update public.pipeline_config_versions set change_note = 'tampered'"),
+      )).rejects.toThrow(/permission denied/);
     } finally {
       await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [
         tenantB.tenantId,

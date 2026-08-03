@@ -6,7 +6,8 @@ import {
   type SealedValue,
 } from "./microsoft-oauth";
 import type { ResolvedMicrosoftWorkbook } from "./microsoft-graph";
-import type { LoadMode } from "./tabular-load";
+import { listPipelineFieldMappings } from "./pipeline-configuration";
+import type { LoadMode, PipelineFieldMapping } from "./tabular-load";
 
 export interface MicrosoftConnectorOverview {
   id: string;
@@ -30,6 +31,7 @@ export interface SharePointSyncContext {
     name: string;
     loadMode: LoadMode;
     keyColumns: string[];
+    fieldMappings: PipelineFieldMapping[];
   };
   source: ResolvedMicrosoftWorkbook;
   deltaLink: string | null;
@@ -217,6 +219,7 @@ export async function getSharePointSyncContext(
     [input.pipelineId, input.tenantId],
   );
   if (!row) throw new Error("The SharePoint workbook pipeline was not found or is not active.");
+  const fieldMappings = await listPipelineFieldMappings(client, input);
   const source = row.source_config as Record<string, unknown>;
   if (!source.driveId || !source.driveItemId || !source.sourceName || !source.sourcePath) {
     throw new Error("The SharePoint workbook configuration is incomplete.");
@@ -229,6 +232,7 @@ export async function getSharePointSyncContext(
       name: row.pipeline_name,
       loadMode: row.load_mode,
       keyColumns: row.key_columns,
+      fieldMappings,
     },
     source: {
       sourceKind: source.sourceKind === "sharepoint" ? "sharepoint" : "onedrive",

@@ -30,4 +30,4 @@ jobs:
           fi
           curl --fail-with-body --silent --show-error --max-time 360 \
             -H "Authorization: Bearer $CRON_SECRET" \
-            https://hized-platform.vercel.app/api/cron/sharepoint
+            https://hized.app/api/cron/sharepoint

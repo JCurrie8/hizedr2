@@ -6,7 +6,7 @@ const hasR2Environment = ["R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_K
   .every((name) => Boolean(process.env[name]));
 
 describe.skipIf(!hasR2Environment)("R2 source object storage", () => {
-  it.each(["https://hized-platform.vercel.app", "https://northstar-installations.hized.com"])(
+  it.each(["https://hized-platform.vercel.app", "https://northstar-installations.hized.app"])(
     "allows browser uploads from %s",
     async (origin) => {
       const upload = await createR2Upload({

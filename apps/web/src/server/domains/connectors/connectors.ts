@@ -1,6 +1,7 @@
 import type { PoolClient } from "@neondatabase/serverless";
 import type { ParsedTable } from "./tabular-file";
-import { prepareTabularLoad, type LoadMode } from "./tabular-load";
+import { listPipelineFieldMappings } from "./pipeline-configuration";
+import { prepareTabularLoad, type LoadMode, type PipelineFieldMapping } from "./tabular-load";
 
 export interface ConnectorOverview {
   id: string;
@@ -18,6 +19,7 @@ export interface ManualFilePipeline {
   name: string;
   loadMode: LoadMode;
   keyColumns: string[];
+  fieldMappings: PipelineFieldMapping[];
 }
 
 export interface PipelineRunOverview {
@@ -130,6 +132,7 @@ export async function listManualFilePipelines(
     name: row.name,
     loadMode: row.load_mode,
     keyColumns: row.key_columns,
+    fieldMappings: [],
   }));
 }
 
@@ -150,12 +153,14 @@ export async function getManualFilePipeline(
     [input.pipelineId, input.tenantId],
   );
   if (!row) throw new Error("The manual file pipeline was not found or is not active.");
+  const fieldMappings = await listPipelineFieldMappings(client, input);
   return {
     id: row.id,
     connectorId: row.connector_id,
     name: row.name,
     loadMode: row.load_mode,
     keyColumns: row.key_columns,
+    fieldMappings,
   };
 }
 
@@ -285,6 +290,7 @@ export async function persistManualFileRun(
     loadMode: input.pipeline.loadMode,
     keyColumns: input.pipeline.keyColumns,
     contentSha256: input.contentSha256,
+    fieldMappings: input.pipeline.fieldMappings,
   });
   const status = prepared.rejectedRows > 0 ? "warning" : "succeeded";
   const { rows: [run] } = await client.query(
@@ -365,15 +371,15 @@ export async function persistManualFileRun(
   await client.query(
     `insert into public.validation_results
        (tenant_id, run_id, rule_key, rule_type, severity, status, affected_rows, message)
-     values ($1, $2, 'row_keys', 'unique', 'warning', $3, $4, $5)`,
+     values ($1, $2, 'row_contract', 'custom', 'warning', $3, $4, $5)`,
     [
       input.tenantId,
       run.id,
       prepared.rejectedRows > 0 ? "failed" : "passed",
       prepared.rejectedRows,
       prepared.rejectedRows > 0
-        ? `${prepared.rejectedRows} rows were quarantined because their configured keys were missing or duplicated.`
-        : "All source rows have valid load keys.",
+        ? `${prepared.rejectedRows} rows were quarantined by required fields, type conversion or load-key checks.`
+        : "All source rows passed the configured mapping, type, required-field and load-key checks.",
     ],
   );
   await client.query(

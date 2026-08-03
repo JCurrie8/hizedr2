@@ -7,14 +7,14 @@ describe("tenantEntryUrl", () => {
       .toBe("/t/northstar-installations/dashboard");
   });
 
-  it("uses the canonical tenant subdomain on hized.com", () => {
-    expect(tenantEntryUrl({ slug: "harbour-field-services", host: "hized.com" }))
-      .toBe("https://harbour-field-services.hized.com/dashboard");
+  it("uses the canonical tenant subdomain on hized.app", () => {
+    expect(tenantEntryUrl({ slug: "harbour-field-services", host: "hized.app" }))
+      .toBe("https://harbour-field-services.hized.app/dashboard");
   });
 
-  it("preserves http for local hized.com-style testing", () => {
-    expect(tenantEntryUrl({ slug: "acme", host: "admin.hized.com", protocol: "http" }))
-      .toBe("http://acme.hized.com/dashboard");
+  it("preserves http for local hized.app-style testing", () => {
+    expect(tenantEntryUrl({ slug: "acme", host: "admin.hized.app", protocol: "http" }))
+      .toBe("http://acme.hized.app/dashboard");
   });
 
   it("keeps internal tenant navigation inside the Vercel path fallback", () => {

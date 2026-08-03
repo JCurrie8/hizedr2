@@ -34,8 +34,8 @@ describe("tenant proxy", () => {
 
   it("does not let an apex path override a real tenant hostname", () => {
     const response = proxy(
-      new NextRequest("https://acme.hized.com/t/spoofed/dashboard", {
-        headers: { host: "acme.hized.com" },
+      new NextRequest("https://acme.hized.app/t/spoofed/dashboard", {
+        headers: { host: "acme.hized.app" },
       }),
     );
     expect(response.headers.get("x-middleware-request-x-tenant-slug")).toBe("acme");
@@ -44,8 +44,8 @@ describe("tenant proxy", () => {
 
   it("rewrites admin subdomain paths into the platform-admin namespace", () => {
     const response = proxy(
-      new NextRequest("https://admin.hized.com/audit", { headers: { host: "admin.hized.com" } }),
+      new NextRequest("https://admin.hized.app/audit", { headers: { host: "admin.hized.app" } }),
     );
-    expect(response.headers.get("x-middleware-rewrite")).toBe("https://admin.hized.com/platform-admin/audit");
+    expect(response.headers.get("x-middleware-rewrite")).toBe("https://admin.hized.app/platform-admin/audit");
   });
 });

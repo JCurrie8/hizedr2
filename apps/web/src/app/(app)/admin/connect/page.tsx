@@ -1,4 +1,6 @@
 import { withUserContext } from "@hized/db";
+import Link from "next/link";
+import { headers } from "next/headers";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import {
   listConnectorOverview,
@@ -7,6 +9,7 @@ import {
 } from "@/server/domains/connectors/connectors";
 import { microsoftConnectorEnvironmentReady } from "@/server/domains/connectors/microsoft-oauth";
 import { listMicrosoftConnectors } from "@/server/domains/connectors/sharepoint-connectors";
+import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import {
   beginMicrosoftConnectionAction,
   configureMicrosoftWorkbookAction,
@@ -30,15 +33,26 @@ export default async function ConnectPage() {
     return <div className="mx-auto w-full max-w-4xl px-6 py-10 text-sm text-muted">Connect is available to company admins and analysts.</div>;
   }
 
-  const { connectors, filePipelines, microsoftConnectors, recentRuns } = await withUserContext(
-    { userId: ctx.profileId, tenantId: ctx.tenant.id },
-    async (client) => ({
-      connectors: await listConnectorOverview(client, { tenantId: ctx.tenant.id }),
-      filePipelines: await listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
-      microsoftConnectors: await listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
-      recentRuns: await listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
-    }),
-  );
+  const [requestHeaders, { connectors, filePipelines, microsoftConnectors, recentRuns }] = await Promise.all([
+    headers(),
+    withUserContext(
+      { userId: ctx.profileId, tenantId: ctx.tenant.id },
+      async (client) => ({
+        connectors: await listConnectorOverview(client, { tenantId: ctx.tenant.id }),
+        filePipelines: await listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
+        microsoftConnectors: await listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
+        recentRuns: await listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
+      }),
+    ),
+  ]);
+  const host = requestHeaders.get("host") ?? "localhost";
+  const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
+  const pipelineHref = (pipelineId: string) => tenantAppUrl({
+    slug: ctx.tenant.slug,
+    host,
+    protocol,
+    path: `/admin/connect/pipelines/${pipelineId}`,
+  });
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -59,8 +73,8 @@ export default async function ConnectPage() {
       <section className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           ["Files", "CSV/Excel uploads plus monitored SharePoint and OneDrive workbooks."],
-          ["Salesforce", "SystemModstamp watermark with a 24-hour replay window."],
-          ["Zendesk", "Cursor-based incremental tickets and service data."],
+          ["Business systems", "CRM, service, finance and workforce sources through reusable incremental adapters."],
+          ["Databases & APIs", "Read-only SQL and common API pipelines selected around each customer's existing systems."],
           ["Custom ETL", "A paid, Hized-managed route for legacy systems, bespoke APIs and advanced transformation rules."],
         ].map(([title, description]) => (
           <div key={title} className="rounded-lg border border-line bg-panel p-4">
@@ -177,7 +191,10 @@ export default async function ConnectPage() {
                     </div>
                     <form action={syncMicrosoftWorkbookAction}>
                       <input type="hidden" name="pipelineId" value={connector.pipelineId} />
-                      <button type="submit" className="rounded bg-teal-deep px-4 py-2 text-sm font-semibold text-white">Sync now</button>
+                      <div className="flex flex-wrap gap-2">
+                        <Link href={pipelineHref(connector.pipelineId)} className="rounded border border-teal-deep px-4 py-2 text-sm font-semibold text-teal-deep">Configure pipeline</Link>
+                        <button type="submit" className="rounded bg-teal-deep px-4 py-2 text-sm font-semibold text-white">Sync now</button>
+                      </div>
                     </form>
                   </div>
                 )}
@@ -193,7 +210,16 @@ export default async function ConnectPage() {
           Files go directly to private object storage, then Hized verifies their size and SHA-256 hash before parsing or loading rows.
         </p>
         {filePipelines.length > 0
-          ? <ManualUploadForm pipelines={filePipelines.map(({ id, name, loadMode }) => ({ id, name, loadMode }))} />
+          ? <>
+              <ManualUploadForm pipelines={filePipelines.map(({ id, name, loadMode }) => ({ id, name, loadMode }))} />
+              <div className="mt-4 flex flex-wrap gap-2">
+                {filePipelines.map((pipeline) => (
+                  <Link key={pipeline.id} href={pipelineHref(pipeline.id)} className="rounded border border-line bg-white px-3 py-2 text-sm font-medium text-teal-deep">
+                    Configure {pipeline.name}
+                  </Link>
+                ))}
+              </div>
+            </>
           : <p className="mt-4 text-sm text-muted">Create a manual file pipeline before uploading a file.</p>}
       </section>
 
