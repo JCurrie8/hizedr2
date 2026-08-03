@@ -53,6 +53,20 @@ export function proxy(request: NextRequest) {
     return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
   }
 
+  // The public apex is an application entry point, not a marketing or
+  // placeholder page. The organisations route resolves the signed-in user
+  // and selects their tenant; a tenant hostname can enter Pulse directly.
+  if (request.nextUrl.pathname === "/" && kind === "apex") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/organisations";
+    return NextResponse.redirect(url);
+  }
+  if (request.nextUrl.pathname === "/" && kind === "tenant") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
+    return NextResponse.redirect(url);
+  }
+
   // Every path under admin.* is namespaced to /platform-admin, EXCEPT the
   // shared, top-level routes below (/login, /invite/*, /api/auth/*) —
   // those must resolve the same regardless of which hostname reached
