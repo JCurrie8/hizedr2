@@ -7,6 +7,8 @@ import { getPulseHomeSnapshot } from "./home";
 describe("Pulse home snapshot", () => {
   const admin = getAdminPool();
   let fixture: TenantFixture;
+  let companyId: string;
+  let teamId: string;
 
   beforeAll(async () => {
     fixture = await createTenantWithUser(admin, {
@@ -22,6 +24,8 @@ describe("Pulse home snapshot", () => {
       "insert into public.org_nodes (tenant_id, node_type, code) values ($1, 'team', 'PH-TEAM') returning id",
       [fixture.tenantId],
     );
+    companyId = company.id;
+    teamId = team.id;
     await admin.query(
       `insert into public.org_node_versions
          (org_node_id, tenant_id, parent_id, name, path, valid_from)
@@ -45,6 +49,11 @@ describe("Pulse home snapshot", () => {
       });
       expect(snapshot).toEqual({
         organisation: { visibleNodes: 2, teams: 1, employees: 0 },
+        hierarchy: {
+          selected: { id: companyId, name: "Pulse Company", nodeType: "company" },
+          breadcrumbs: [{ id: companyId, name: "Pulse Company", nodeType: "company" }],
+          children: [{ id: teamId, name: "Pulse Team", nodeType: "team" }],
+        },
         kpis: [],
         connect: null,
       });

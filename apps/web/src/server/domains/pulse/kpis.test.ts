@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withUserContext } from "@hized/db";
 import { cleanupFixture, createTenantWithUser, getAdminPool, type TenantFixture } from "@hized/testing";
-import { listPulseKpiCards, targetState } from "./kpis";
+import { getPulseHierarchy, listPulseKpiCards, targetState, thresholdState, trendDirection } from "./kpis";
 
 describe("governed Pulse KPI cards", () => {
   const admin = getAdminPool();
   let fixture: TenantFixture;
   let manager: { profileId: string; authUserId: string };
+  let companyId: string;
   let teamAId: string;
+  let teamBId: string;
 
   beforeAll(async () => {
     const suffix = Date.now();
@@ -29,7 +31,9 @@ describe("governed Pulse KPI cards", () => {
       "insert into public.org_nodes (tenant_id, node_type, code) values ($1, 'team', 'PK-B') returning id",
       [fixture.tenantId],
     );
+    companyId = company.id;
     teamAId = teamA.id;
+    teamBId = teamB.id;
     await admin.query(
       `insert into public.org_node_versions
          (org_node_id, tenant_id, parent_id, name, path, valid_from)
@@ -73,11 +77,12 @@ describe("governed Pulse KPI cards", () => {
       `insert into public.kpi_definitions
          (tenant_id, dataset_id, kpi_key, version_number, name, definition,
           formula_reference, owner_name, reviewer_name, unit, decimal_places, favourable_direction,
-          aggregation, refresh_cadence, audience_roles, valid_from, approval_status,
+          aggregation, refresh_cadence, thresholds, audience_roles, valid_from, approval_status,
           approved_by, approved_at, created_by)
        values ($1, $2, 'first_time_completion', 1, 'First-time completion',
                'Completed jobs without a repeat visit.', 'first_time / completed',
                'Head of Operations', 'Managing Director', 'percentage', 1, 'higher', 'ratio', 'Daily',
+               '{"green":{"gte":92},"amber":{"gte":88}}'::jsonb,
                enum_range(null::public.app_role), current_date - 30, 'approved', $3, now(), $3)
        returning id`,
       [fixture.tenantId, dataset.id, fixture.profileId],
@@ -110,6 +115,13 @@ describe("governed Pulse KPI cards", () => {
     await admin.query(
       `insert into public.kpi_values
          (tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
+          actual_value, target_value, prior_period_value, source_refreshed_at, calculated_by)
+       values ($1, $2, $3, current_date - 14, current_date - 7, 88.4, 92, 87.5, now(), $4)`,
+      [fixture.tenantId, approved.id, teamA.id, fixture.profileId],
+    );
+    await admin.query(
+      `insert into public.kpi_values
+         (tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
           actual_value, target_value, source_refreshed_at, calculated_by)
        values ($1, $2, $3, current_date - 7, current_date, 31.5, 30, now(), $4)`,
       [fixture.tenantId, executiveOnly.id, teamA.id, fixture.profileId],
@@ -136,6 +148,11 @@ describe("governed Pulse KPI cards", () => {
       organisation: { name: "KPI Company" },
       freshness: { status: "fresh" },
     });
+    expect(cards[0]?.thresholds).toEqual({ green: { gte: 92 }, amber: { gte: 88 } });
+    expect(cards[0]?.trend).toEqual([
+      { periodEnd: null, label: "Prior period", actualValue: 89.7 },
+      expect.objectContaining({ actualValue: 91.2 }),
+    ]);
     expect(cards[0]?.periodStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(cards[0]?.periodEnd).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(Number.isNaN(Date.parse(cards[0]?.freshness.sourceRefreshedAt ?? ""))).toBe(false);
@@ -151,6 +168,34 @@ describe("governed Pulse KPI cards", () => {
       key: "first_time_completion",
       actualValue: 90.5,
       organisation: { id: teamAId, name: "Team A" },
+    });
+    expect(cards[0]?.trend.map((point) => point.actualValue)).toEqual([88.4, 90.5]);
+  });
+
+  it("drills to a visible descendant and builds an RLS-filtered breadcrumb", async () => {
+    const hierarchy = await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => getPulseHierarchy(client, { tenantId: fixture.tenantId, requestedOrgNodeId: teamAId }),
+    );
+    expect(hierarchy).toEqual({
+      selected: { id: teamAId, name: "Team A", nodeType: "team" },
+      breadcrumbs: [
+        { id: companyId, name: "KPI Company", nodeType: "company" },
+        { id: teamAId, name: "Team A", nodeType: "team" },
+      ],
+      children: [],
+    });
+  });
+
+  it("falls back to the manager's primary scope when a sibling is requested", async () => {
+    const hierarchy = await withUserContext(
+      { userId: manager.profileId, tenantId: fixture.tenantId },
+      (client) => getPulseHierarchy(client, { tenantId: fixture.tenantId, requestedOrgNodeId: teamBId }),
+    );
+    expect(hierarchy).toEqual({
+      selected: { id: teamAId, name: "Team A", nodeType: "team" },
+      breadcrumbs: [{ id: teamAId, name: "Team A", nodeType: "team" }],
+      children: [],
     });
   });
 
@@ -177,5 +222,19 @@ describe("targetState", () => {
     expect(targetState({ actualValue: 93, targetValue: 92, favourableDirection: "higher" })).toBe("on_track");
     expect(targetState({ actualValue: 6, targetValue: 5, favourableDirection: "lower" })).toBe("off_track");
     expect(targetState({ actualValue: 10, targetValue: null, favourableDirection: "target" })).toBe("no_target");
+  });
+
+  it("uses governed higher/lower threshold bands before target fallback", () => {
+    expect(thresholdState({ actualValue: 93, targetValue: 92, favourableDirection: "higher", thresholds: { green: { gte: 92 }, amber: { gte: 88 } } })).toBe("green");
+    expect(thresholdState({ actualValue: 90, targetValue: 92, favourableDirection: "higher", thresholds: { green: { gte: 92 }, amber: { gte: 88 } } })).toBe("amber");
+    expect(thresholdState({ actualValue: 105, targetValue: 85, favourableDirection: "lower", thresholds: { green: { lte: 85 }, amber: { lte: 100 } } })).toBe("red");
+    expect(thresholdState({ actualValue: 93, targetValue: 92, favourableDirection: "higher", thresholds: {} })).toBe("green");
+  });
+
+  it("interprets movement using the KPI's favourable direction", () => {
+    expect(trendDirection({ actualValue: 93, priorPeriodValue: 90, targetValue: 92, favourableDirection: "higher" })).toBe("improving");
+    expect(trendDirection({ actualValue: 80, priorPeriodValue: 90, targetValue: 85, favourableDirection: "lower" })).toBe("improving");
+    expect(trendDirection({ actualValue: 12, priorPeriodValue: 11, targetValue: 10, favourableDirection: "target" })).toBe("deteriorating");
+    expect(trendDirection({ actualValue: 10, priorPeriodValue: null, targetValue: 10, favourableDirection: "target" })).toBe("no_comparison");
   });
 });

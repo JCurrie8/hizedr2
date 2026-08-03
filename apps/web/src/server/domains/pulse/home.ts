@@ -5,7 +5,7 @@ import {
   type ConnectorOverview,
   type PipelineRunOverview,
 } from "../connectors/connectors";
-import { listPulseKpiCards, type PulseKpiCard } from "./kpis";
+import { getPulseHierarchy, listPulseKpiCards, type PulseHierarchy, type PulseKpiCard } from "./kpis";
 
 export interface PulseHomeSnapshot {
   organisation: {
@@ -13,6 +13,7 @@ export interface PulseHomeSnapshot {
     teams: number;
     employees: number;
   };
+  hierarchy: PulseHierarchy | null;
   kpis: PulseKpiCard[];
   connect: null | {
     connectors: ConnectorOverview[];
@@ -27,7 +28,7 @@ export interface PulseHomeSnapshot {
 
 export async function getPulseHomeSnapshot(
   client: PoolClient,
-  input: { tenantId: string; includeConnectHealth: boolean },
+  input: { tenantId: string; includeConnectHealth: boolean; requestedOrgNodeId?: string | null },
 ): Promise<PulseHomeSnapshot> {
   const { rows: [organisation] } = await client.query(
     `select
@@ -49,10 +50,17 @@ export async function getPulseHomeSnapshot(
     employees: Number(organisation?.employees ?? 0),
   };
 
-  const kpis = await listPulseKpiCards(client, { tenantId: input.tenantId });
+  const hierarchy = await getPulseHierarchy(client, {
+    tenantId: input.tenantId,
+    requestedOrgNodeId: input.requestedOrgNodeId,
+  });
+  const kpis = await listPulseKpiCards(client, {
+    tenantId: input.tenantId,
+    orgNodeId: hierarchy?.selected.id,
+  });
 
   if (!input.includeConnectHealth) {
-    return { organisation: organisationSummary, kpis, connect: null };
+    return { organisation: organisationSummary, hierarchy, kpis, connect: null };
   }
 
   const [connectors, recentRuns] = await Promise.all([
@@ -65,6 +73,7 @@ export async function getPulseHomeSnapshot(
 
   return {
     organisation: organisationSummary,
+    hierarchy,
     kpis,
     connect: {
       connectors,

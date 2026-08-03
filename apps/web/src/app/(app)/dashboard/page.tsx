@@ -3,10 +3,17 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { getPulseHomeSnapshot } from "@/server/domains/pulse/home";
-import { targetState, type PulseKpiCard } from "@/server/domains/pulse/kpis";
+import {
+  thresholdState,
+  trendDirection,
+  type KpiThresholdState,
+  type PulseKpiCard,
+} from "@/server/domains/pulse/kpis";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { redirect } from "next/navigation";
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function formatDateTime(value: string, timezone: string): string {
   return new Intl.DateTimeFormat("en-GB", {
@@ -36,9 +43,58 @@ function formatPeriod(end: string): string {
     .format(new Date(`${end}T00:00:00Z`));
 }
 
-export default async function DashboardPage() {
+function thresholdPresentation(state: KpiThresholdState) {
+  if (state === "green") return { label: "On track", classes: "bg-emerald-100 text-emerald-900", dot: "bg-success" };
+  if (state === "amber") return { label: "Watch", classes: "bg-amber-100 text-amber-900", dot: "bg-warning" };
+  if (state === "red") return { label: "Needs attention", classes: "bg-red-100 text-red-900", dot: "bg-danger" };
+  return { label: "No threshold", classes: "bg-canvas text-muted", dot: "bg-muted" };
+}
+
+function TrendSparkline({ kpi }: { kpi: PulseKpiCard }) {
+  if (kpi.trend.length < 2) return <p className="text-xs text-muted">More periods needed for a trend</p>;
+  const width = 180;
+  const height = 52;
+  const padding = 4;
+  const values = kpi.trend.map((point) => point.actualValue);
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const range = maximum - minimum || 1;
+  const points = values.map((value, index) => {
+    const x = padding + (index / (values.length - 1)) * (width - padding * 2);
+    const y = height - padding - ((value - minimum) / range) * (height - padding * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const direction = trendDirection(kpi);
+  const lineColour = direction === "deteriorating" ? "#D64545" : direction === "improving" ? "#0E7C80" : "#5B6B76";
+  const directionLabel = direction === "no_comparison" ? "No comparison" : direction[0].toUpperCase() + direction.slice(1);
+
+  return (
+    <div>
+      <svg
+        role="img"
+        aria-label={`${kpi.name} trend: ${directionLabel.toLowerCase()}`}
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-14 w-full"
+        preserveAspectRatio="none"
+      >
+        <polyline points={points} fill="none" stroke={lineColour} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div className="mt-1 flex items-center justify-between gap-3 text-xs">
+        <span className={direction === "deteriorating" ? "font-semibold text-danger" : direction === "improving" ? "font-semibold text-teal-deep" : "text-muted"}>
+          {directionLabel}
+        </span>
+        {kpi.priorPeriodValue !== null && <span className="text-muted">Prior {formatKpiValue(kpi, kpi.priorPeriodValue)}</span>}
+      </div>
+    </div>
+  );
+}
+
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ org?: string }> }) {
   const ctx = await getAuthContextFromRequest();
   if (ctx.kind !== "tenant") return null; // layout already redirects/handles other cases
+
+  const requestedOrg = (await searchParams).org;
+  const requestedOrgNodeId = requestedOrg && UUID_PATTERN.test(requestedOrg) ? requestedOrg : null;
 
   const includeConnectHealth = ctx.role === "company_admin" || ctx.role === "analyst";
   const [requestHeaders, snapshot] = await Promise.all([
@@ -47,7 +103,7 @@ export default async function DashboardPage() {
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "pulse" })) return null;
-        return getPulseHomeSnapshot(client, { tenantId: ctx.tenant.id, includeConnectHealth });
+        return getPulseHomeSnapshot(client, { tenantId: ctx.tenant.id, includeConnectHealth, requestedOrgNodeId });
       },
     ),
   ]);
@@ -58,8 +114,9 @@ export default async function DashboardPage() {
   const firstName = ctx.fullName?.trim().split(/\s+/)[0] ?? null;
   const connect = snapshot.connect;
   const kpis = snapshot.kpis;
+  const hierarchy = snapshot.hierarchy;
   const hasCompletedRun = connect?.recentRuns.some((run) => run.status === "succeeded" || run.status === "warning") ?? false;
-  const kpisNeedingAttention = kpis.filter((kpi) => targetState(kpi) === "off_track" || kpi.freshness.status === "stale");
+  const kpisNeedingAttention = kpis.filter((kpi) => ["amber", "red"].includes(thresholdState(kpi)) || kpi.freshness.status === "stale");
   const attentionCount = (connect?.failedRuns ?? 0) + (connect?.warningRuns ?? 0) + kpisNeedingAttention.length;
 
   return (
@@ -79,6 +136,22 @@ export default async function DashboardPage() {
         </div>
       </div>
 
+      {hierarchy && (
+        <nav aria-label="Organisation drill path" className="mt-5 flex flex-wrap items-center gap-2 text-sm">
+          {hierarchy.breadcrumbs.map((node, index) => {
+            const isCurrent = node.id === hierarchy.selected.id;
+            return (
+              <div key={node.id} className="flex items-center gap-2">
+                {index > 0 && <span aria-hidden="true" className="text-muted">/</span>}
+                {isCurrent
+                  ? <span aria-current="page" className="font-semibold text-ink">{node.name}</span>
+                  : <Link href={tenantHref(`/dashboard?org=${encodeURIComponent(node.id)}`)} className="font-medium text-teal-deep hover:underline">{node.name}</Link>}
+              </div>
+            );
+          })}
+        </nav>
+      )}
+
       <section className={`mt-7 rounded-xl border p-4 sm:p-5 ${attentionCount > 0 ? "border-warning/40 bg-amber-50" : "border-line bg-panel"}`}>
         <div className="flex gap-3">
           <span aria-hidden="true" className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${attentionCount > 0 ? "bg-warning" : hasCompletedRun ? "bg-success" : "bg-teal"}`} />
@@ -94,7 +167,7 @@ export default async function DashboardPage() {
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
               {kpis.length > 0
-                ? `${kpis.length} governed KPI${kpis.length === 1 ? " is" : "s are"} published for ${kpis[0]?.organisation.name ?? "your scope"}. Every number retains its definition, target, owner and freshness.`
+                ? `${kpis.length} governed KPI${kpis.length === 1 ? " is" : "s are"} published for ${hierarchy?.selected.name ?? kpis[0]?.organisation.name ?? "your scope"}. Every number retains its definition, threshold, target, trend, owner and freshness.`
                 : connect?.latestRunAt
                 ? `Latest observed pipeline activity: ${formatDateTime(connect.latestRunAt, ctx.tenant.timezone)}.`
                 : includeConnectHealth
@@ -120,20 +193,21 @@ export default async function DashboardPage() {
         ))}
       </section>
 
-      {kpis.length > 0 && (
+      {hierarchy && (
         <section aria-labelledby="performance-heading" className="mt-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.16em] text-teal-deep">Governed performance</p>
               <h2 id="performance-heading" className="mt-1 font-display text-2xl font-semibold text-ink">
-                {kpis[0]?.organisation.name}
+                {hierarchy.selected.name}
               </h2>
             </div>
-            <p className="text-xs text-muted">Latest approved period per KPI</p>
+            <p className="text-xs capitalize text-muted">{hierarchy.selected.nodeType.replaceAll("_", " ")} · latest approved period per KPI</p>
           </div>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {kpis.length > 0 ? <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {kpis.map((kpi) => {
-              const state = targetState(kpi);
+              const state = thresholdState(kpi);
+              const presentation = thresholdPresentation(state);
               const variance = kpi.targetValue === null ? null : kpi.actualValue - kpi.targetValue;
               return (
                 <article key={kpi.definitionId} className="rounded-xl border border-line bg-panel p-5 shadow-sm">
@@ -142,24 +216,29 @@ export default async function DashboardPage() {
                       <h3 className="font-display text-lg font-semibold text-ink">{kpi.name}</h3>
                       <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{kpi.definition}</p>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                      state === "off_track" ? "bg-amber-100 text-amber-900" : state === "on_track" ? "bg-emerald-100 text-emerald-900" : "bg-canvas text-muted"
-                    }`}>
-                      {state === "off_track" ? "Needs attention" : state === "on_track" ? "On track" : "No target"}
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${presentation.classes}`}>
+                      {presentation.label}
                     </span>
                   </div>
                   <div className="mt-5 flex items-end justify-between gap-4">
                     <p className="font-display text-4xl font-bold tracking-tight text-ink">{formatKpiValue(kpi, kpi.actualValue)}</p>
                     {variance !== null && (
-                      <p className={`pb-1 text-right text-sm font-semibold ${state === "off_track" ? "text-danger" : "text-teal-deep"}`}>
+                      <p className={`pb-1 text-right text-sm font-semibold ${state === "red" || state === "amber" ? "text-danger" : "text-teal-deep"}`}>
                         {variance > 0 ? "+" : ""}{formatKpiValue(kpi, variance)} vs target
                       </p>
                     )}
+                  </div>
+                  <div className="mt-4 rounded-lg bg-canvas px-3 py-2">
+                    <TrendSparkline kpi={kpi} />
                   </div>
                   <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-line pt-4 text-xs">
                     <div>
                       <dt className="text-muted">Target</dt>
                       <dd className="mt-1 font-semibold text-ink">{kpi.targetValue === null ? "Not set" : formatKpiValue(kpi, kpi.targetValue)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted">Threshold</dt>
+                      <dd className="mt-1 flex items-center gap-2 font-semibold text-ink"><span aria-hidden="true" className={`h-2 w-2 rounded-full ${presentation.dot}`} />{presentation.label}</dd>
                     </div>
                     <div>
                       <dt className="text-muted">Period ending</dt>
@@ -179,6 +258,38 @@ export default async function DashboardPage() {
                 </article>
               );
             })}
+          </div> : (
+            <div className="mt-4 rounded-xl border border-dashed border-line bg-panel p-6">
+              <h3 className="font-display text-lg font-semibold text-ink">No KPI values published at this level</h3>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">Continue into a child area below, or publish a governed value for {hierarchy.selected.name}. Pulse never substitutes a parent number for a missing team or employee result.</p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {hierarchy && hierarchy.children.length > 0 && (
+        <section aria-labelledby="drill-heading" className="mt-5 rounded-xl border border-line bg-panel p-5 sm:p-6">
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-teal-deep">Organisation drill-down</p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 id="drill-heading" className="font-display text-2xl font-semibold text-ink">Explore the next level</h2>
+              <p className="mt-1 text-sm text-muted">Only areas inside your permitted organisation scope are available.</p>
+            </div>
+            <span className="text-xs text-muted">{hierarchy.children.length} direct area{hierarchy.children.length === 1 ? "" : "s"}</span>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {hierarchy.children.map((child) => (
+              <Link
+                key={child.id}
+                href={tenantHref(`/dashboard?org=${encodeURIComponent(child.id)}`)}
+                className="group rounded-lg border border-line bg-canvas p-4 transition hover:border-teal hover:bg-white"
+              >
+                <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">{child.nodeType.replaceAll("_", " ")}</span>
+                <span className="mt-2 flex items-center justify-between gap-3 font-display text-lg font-semibold text-ink">
+                  {child.name}<span aria-hidden="true" className="text-teal-deep transition group-hover:translate-x-1">→</span>
+                </span>
+              </Link>
+            ))}
           </div>
         </section>
       )}
