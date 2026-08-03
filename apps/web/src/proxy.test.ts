@@ -48,4 +48,20 @@ describe("tenant proxy", () => {
     );
     expect(response.headers.get("x-middleware-rewrite")).toBe("https://admin.hized.app/platform-admin/audit");
   });
+
+  it("routes the apex root through the signed-in organisation chooser", () => {
+    const response = proxy(
+      new NextRequest("https://hized.app/", { headers: { host: "hized.app" } }),
+    );
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("https://hized.app/organisations");
+  });
+
+  it("routes a tenant root directly into Pulse", () => {
+    const response = proxy(
+      new NextRequest("https://northstar.hized.app/", { headers: { host: "northstar.hized.app" } }),
+    );
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("https://northstar.hized.app/dashboard");
+  });
 });
