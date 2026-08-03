@@ -10,6 +10,7 @@ import {
 } from "./microsoft-graph";
 import { ensureFreshMicrosoftCredentials } from "./microsoft-oauth";
 import {
+  acquireSharePointSyncLease,
   commitSharePointSelectedItemDeleted,
   commitSharePointSyncSuccess,
   getSharePointSyncContext,
@@ -42,10 +43,19 @@ export async function syncSharePointWorkbook(input: {
   tenantId: string;
   actorUserId: string;
   pipelineId: string;
+  leaseToken?: string;
+  triggerType?: "manual_sync" | "schedule" | "webhook" | "retry" | "backfill";
 }): Promise<SharePointSyncResult> {
   const context = await withUserContext(
     { userId: input.actorUserId, tenantId: input.tenantId },
     (client) => getSharePointSyncContext(client, { tenantId: input.tenantId, pipelineId: input.pipelineId }),
+  );
+  const leaseToken = input.leaseToken ?? await withUserContext(
+    { userId: input.actorUserId, tenantId: input.tenantId },
+    (client) => acquireSharePointSyncLease(client, {
+      tenantId: input.tenantId,
+      connectorId: context.connectorId,
+    }),
   );
 
   try {
@@ -90,6 +100,8 @@ export async function syncSharePointWorkbook(input: {
             connectorId: context.connectorId,
             pipelineId: context.pipeline.id,
             deltaLink,
+            expectedDeltaLink: context.deltaLink,
+            leaseToken,
           });
           await insertAuditLog(client, {
             tenantId: input.tenantId,
@@ -112,6 +124,8 @@ export async function syncSharePointWorkbook(input: {
           connectorId: context.connectorId,
           pipelineId: context.pipeline.id,
           deltaLink,
+          expectedDeltaLink: context.deltaLink,
+          leaseToken,
         }),
       );
       return { outcome: "unchanged" };
@@ -153,7 +167,7 @@ export async function syncSharePointWorkbook(input: {
       sourcePath: source.sourcePath,
       sourceETag: source.sourceETag,
       sourceCTag: source.sourceCTag,
-      triggerType: "manual_sync" as const,
+      triggerType: input.triggerType ?? "manual_sync",
       sourceMetadata: {
         provider: "microsoft_graph",
         sourceKind: source.sourceKind,
@@ -182,6 +196,7 @@ export async function syncSharePointWorkbook(input: {
               driveItemId: source.driveItemId,
               sourceName: source.sourceName,
               contentSha256,
+              triggerType: input.triggerType ?? "manual_sync",
               acceptedRows: result.acceptedRows,
               rejectedRows: result.rejectedRows,
             },
@@ -223,6 +238,8 @@ export async function syncSharePointWorkbook(input: {
         connectorId: context.connectorId,
         pipelineId: context.pipeline.id,
         deltaLink,
+        expectedDeltaLink: context.deltaLink,
+        leaseToken,
       }),
     );
     return {
@@ -240,6 +257,7 @@ export async function syncSharePointWorkbook(input: {
         tenantId: input.tenantId,
         connectorId: context.connectorId,
         message,
+        leaseToken,
       }),
     ).catch(() => {});
     throw new Error(message);

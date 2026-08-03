@@ -247,23 +247,52 @@ export async function getSharePointSyncContext(
   };
 }
 
+export async function acquireSharePointSyncLease(
+  client: PoolClient,
+  input: { tenantId: string; connectorId: string },
+): Promise<string> {
+  const { rows: [row] } = await client.query(
+    `update public.connector_sync_state set
+       lease_token = gen_random_uuid(), lease_expires_at = now() + interval '10 minutes', updated_at = now()
+     where connector_id = $1 and tenant_id = $2
+       and (lease_expires_at is null or lease_expires_at <= now())
+     returning lease_token`,
+    [input.connectorId, input.tenantId],
+  );
+  if (!row) throw new Error("This Microsoft workbook is already synchronizing.");
+  return row.lease_token;
+}
+
 export async function commitSharePointSyncSuccess(
   client: PoolClient,
-  input: { tenantId: string; connectorId: string; pipelineId: string; deltaLink: string },
+  input: {
+    tenantId: string;
+    connectorId: string;
+    pipelineId: string;
+    deltaLink: string;
+    expectedDeltaLink: string | null;
+    leaseToken: string;
+  },
 ): Promise<void> {
-  await client.query(
+  const syncState = await client.query(
     `update public.connector_sync_state set
        delta_link = $3, last_polled_at = now(), last_success_at = now(), last_error = null,
-       consecutive_failures = 0, next_retry_at = null, updated_at = now()
-     where connector_id = $1 and tenant_id = $2`,
-    [input.connectorId, input.tenantId, input.deltaLink],
+       consecutive_failures = 0, next_retry_at = null,
+       next_poll_at = now() + make_interval(mins => poll_interval_minutes),
+       lease_token = null, lease_expires_at = null, updated_at = now()
+     where connector_id = $1 and tenant_id = $2
+       and delta_link is not distinct from $4 and lease_token = $5
+     returning connector_id`,
+    [input.connectorId, input.tenantId, input.deltaLink, input.expectedDeltaLink, input.leaseToken],
   );
-  await client.query(
+  if (syncState.rowCount !== 1) throw new Error("The Microsoft sync checkpoint changed while this run was active.");
+  const checkpoint = await client.query(
     `update public.pipeline_checkpoints set
        cursor_value = jsonb_build_object('deltaLink', $3::text), committed_through_at = now(), updated_at = now()
      where pipeline_id = $1 and tenant_id = $2 and strategy = 'delta'`,
     [input.pipelineId, input.tenantId, input.deltaLink],
   );
+  if (checkpoint.rowCount !== 1) throw new Error("The Microsoft pipeline delta checkpoint was not found.");
   await client.query(
     `update public.connectors set status = 'active', updated_at = now(),
        last_tested_at = now(), last_test_status = 'succeeded', last_test_message = 'Microsoft Graph synchronization succeeded'
@@ -274,22 +303,35 @@ export async function commitSharePointSyncSuccess(
 
 export async function commitSharePointSelectedItemDeleted(
   client: PoolClient,
-  input: { tenantId: string; connectorId: string; pipelineId: string; deltaLink: string },
+  input: {
+    tenantId: string;
+    connectorId: string;
+    pipelineId: string;
+    deltaLink: string;
+    expectedDeltaLink: string | null;
+    leaseToken: string;
+  },
 ): Promise<void> {
   const message = "The selected Microsoft workbook was deleted or moved outside the connected drive.";
-  await client.query(
+  const syncState = await client.query(
     `update public.connector_sync_state set
        delta_link = $3, last_polled_at = now(), last_error = $4,
-       consecutive_failures = 0, next_retry_at = null, updated_at = now()
-     where connector_id = $1 and tenant_id = $2`,
-    [input.connectorId, input.tenantId, input.deltaLink, message],
+       consecutive_failures = 0, next_retry_at = null,
+       next_poll_at = now() + make_interval(mins => poll_interval_minutes),
+       lease_token = null, lease_expires_at = null, updated_at = now()
+     where connector_id = $1 and tenant_id = $2
+       and delta_link is not distinct from $5 and lease_token = $6
+     returning connector_id`,
+    [input.connectorId, input.tenantId, input.deltaLink, message, input.expectedDeltaLink, input.leaseToken],
   );
-  await client.query(
+  if (syncState.rowCount !== 1) throw new Error("The Microsoft sync checkpoint changed while this run was active.");
+  const checkpoint = await client.query(
     `update public.pipeline_checkpoints set
        cursor_value = jsonb_build_object('deltaLink', $3::text), committed_through_at = now(), updated_at = now()
      where pipeline_id = $1 and tenant_id = $2 and strategy = 'delta'`,
     [input.pipelineId, input.tenantId, input.deltaLink],
   );
+  if (checkpoint.rowCount !== 1) throw new Error("The Microsoft pipeline delta checkpoint was not found.");
   await client.query(
     `update public.connectors set status = 'error', updated_at = now(), last_test_status = 'failed', last_test_message = $3
      where id = $1 and tenant_id = $2`,
@@ -299,20 +341,23 @@ export async function commitSharePointSelectedItemDeleted(
 
 export async function recordSharePointSyncFailure(
   client: PoolClient,
-  input: { tenantId: string; connectorId: string; message: string },
-): Promise<void> {
-  await client.query(
+  input: { tenantId: string; connectorId: string; message: string; leaseToken: string },
+): Promise<boolean> {
+  const syncState = await client.query(
     `update public.connector_sync_state set
        last_polled_at = now(), last_error = $3,
        consecutive_failures = consecutive_failures + 1,
        next_retry_at = now() + make_interval(secs => least(3600, 60 * power(2, least(consecutive_failures, 5))::integer)),
-       updated_at = now()
-     where connector_id = $1 and tenant_id = $2`,
-    [input.connectorId, input.tenantId, input.message.slice(0, 500)],
+       lease_token = null, lease_expires_at = null, updated_at = now()
+     where connector_id = $1 and tenant_id = $2 and lease_token = $4
+     returning connector_id`,
+    [input.connectorId, input.tenantId, input.message.slice(0, 500), input.leaseToken],
   );
+  if (syncState.rowCount !== 1) return false;
   await client.query(
     `update public.connectors set status = 'error', updated_at = now(), last_test_status = 'failed', last_test_message = $3
      where id = $1 and tenant_id = $2`,
     [input.connectorId, input.tenantId, input.message.slice(0, 500)],
   );
+  return true;
 }
