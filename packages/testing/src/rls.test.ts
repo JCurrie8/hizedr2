@@ -215,6 +215,7 @@ describe("RLS tenant isolation", () => {
        order by p.proname`,
       [[
         "accept_invitation_by_token",
+        "approve_kpi_definition_version",
         "can_read_governed_dataset",
         "can_read_kpi_definition",
         "can_read_kpi_definition_row",
@@ -228,7 +229,7 @@ describe("RLS tenant isolation", () => {
         "is_kpi_governor",
       ]],
     );
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(13);
     expect(rows.every((row) => row.public_execute === false)).toBe(true);
   });
 
@@ -608,10 +609,10 @@ describe("RLS tenant isolation", () => {
           (client) => client.query(
             `insert into public.kpi_definitions
                (tenant_id, dataset_id, kpi_key, version_number, name, definition,
-                formula_reference, owner_name, unit, favourable_direction, aggregation,
+                formula_reference, owner_name, reviewer_name, unit, favourable_direction, aggregation,
                 refresh_cadence, valid_from, created_by)
              values ($1, $2, 'approval_test', 1, 'Approval test', 'A governed test KPI.',
-                     'count(test_rows)', 'Test owner', 'number', 'higher', 'sum',
+                     'count(test_rows)', 'Test owner', 'Test reviewer', 'number', 'higher', 'sum',
                      'Daily', current_date, $3)
              returning id`,
             [tenantEmployee.tenantId, dataset.id, tenantEmployee.profileId],
@@ -625,13 +626,11 @@ describe("RLS tenant isolation", () => {
         withUserContext(
           { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
           (client) => client.query(
-            `update public.kpi_definitions
-             set approval_status = 'approved', approved_by = $1, approved_at = now()
-             where id = $2`,
-            [tenantEmployee.profileId, definitionId],
+            "select public.approve_kpi_definition_version($1, $2)",
+            [tenantEmployee.tenantId, definitionId],
           ),
         ),
-      ).rejects.toThrow(/row-level security policy/);
+      ).rejects.toThrow(/Only a Company Admin/);
 
       await admin.query(
         "update public.tenant_memberships set role = 'company_admin' where tenant_id = $1 and user_id = $2",
@@ -642,11 +641,12 @@ describe("RLS tenant isolation", () => {
         approved = await withUserContext(
           { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
           (client) => client.query(
-            `update public.kpi_definitions
-             set approval_status = 'approved', approved_by = $1, approved_at = now()
-             where id = $2 returning approval_status`,
-            [tenantEmployee.profileId, definitionId],
-          ).then((result) => result.rows[0]?.approval_status),
+            "select public.approve_kpi_definition_version($1, $2)",
+            [tenantEmployee.tenantId, definitionId],
+          ).then(async () => client.query(
+            "select approval_status from public.kpi_definitions where id = $1",
+            [definitionId],
+          )).then((result) => result.rows[0]?.approval_status),
         );
       } catch (error) {
         throw new Error("Company Admin approval failed", { cause: error });

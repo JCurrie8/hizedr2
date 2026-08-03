@@ -1,4 +1,5 @@
 import type { PoolClient } from "@neondatabase/serverless";
+import type { AppRole } from "@hized/contracts";
 
 export type KpiUnit = "number" | "percentage" | "currency" | "duration" | "score";
 export type KpiDirection = "higher" | "lower" | "target";
@@ -32,11 +33,21 @@ export interface KpiCatalogueEntry {
   version: number;
   name: string;
   definition: string;
+  businessPurpose: string;
   formulaReference: string;
   ownerName: string;
+  reviewerName: string;
   unit: KpiUnit;
   currencyCode: string | null;
+  decimalPlaces: number;
   favourableDirection: KpiDirection;
+  aggregation: string;
+  targetMethod: string;
+  thresholds: Record<string, unknown>;
+  permittedDimensions: string[];
+  applicableNodeTypes: string[];
+  audienceRoles: AppRole[];
+  refreshCadence: string;
   approvalStatus: "draft" | "approved" | "rejected";
   validFrom: string;
   validTo: string | null;
@@ -60,11 +71,21 @@ export async function listKpiCatalogue(
        definition.version_number,
        definition.name,
        definition.definition,
+       definition.business_purpose,
        definition.formula_reference,
        definition.owner_name,
+       definition.reviewer_name,
        definition.unit,
        definition.currency_code,
+       definition.decimal_places,
        definition.favourable_direction,
+       definition.aggregation,
+       definition.target_method,
+       definition.thresholds,
+       definition.permitted_dimensions,
+       definition.applicable_node_types,
+       definition.audience_roles,
+       definition.refresh_cadence as definition_refresh_cadence,
        definition.approval_status,
        definition.valid_from,
        definition.valid_to,
@@ -87,11 +108,21 @@ export async function listKpiCatalogue(
     version: Number(row.version_number),
     name: row.name,
     definition: row.definition,
+    businessPurpose: row.business_purpose,
     formulaReference: row.formula_reference,
     ownerName: row.owner_name,
+    reviewerName: row.reviewer_name,
     unit: row.unit,
     currencyCode: row.currency_code,
+    decimalPlaces: Number(row.decimal_places),
     favourableDirection: row.favourable_direction,
+    aggregation: row.aggregation,
+    targetMethod: row.target_method,
+    thresholds: row.thresholds,
+    permittedDimensions: row.permitted_dimensions,
+    applicableNodeTypes: row.applicable_node_types,
+    audienceRoles: row.audience_roles,
+    refreshCadence: row.definition_refresh_cadence,
     approvalStatus: row.approval_status,
     validFrom: String(row.valid_from),
     validTo: row.valid_to === null ? null : String(row.valid_to),

@@ -3,8 +3,17 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
+import { listPublishedDatasetOptions } from "@/server/domains/pulse/kpi-governance";
 import { listKpiCatalogue } from "@/server/domains/pulse/kpis";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
+import {
+  approveKpiDraftAction,
+  createKpiDraftAction,
+  createNextKpiVersionAction,
+  rejectKpiDraftAction,
+  updateKpiDraftAction,
+} from "./actions";
+import { KpiDefinitionForm } from "./KpiDefinitionForm";
 
 export default async function KpiCataloguePage() {
   const ctx = await getAuthContextFromRequest();
@@ -15,11 +24,15 @@ export default async function KpiCataloguePage() {
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });
   if (ctx.role !== "company_admin" && ctx.role !== "analyst") redirect(tenantHref("/dashboard"));
 
-  const catalogue = await withUserContext(
+  const { catalogue, datasets } = await withUserContext(
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
-    (client) => listKpiCatalogue(client, { tenantId: ctx.tenant.id }),
+    async (client) => ({
+      catalogue: await listKpiCatalogue(client, { tenantId: ctx.tenant.id }),
+      datasets: await listPublishedDatasetOptions(client, { tenantId: ctx.tenant.id }),
+    }),
   );
   const approvedCount = catalogue.filter((entry) => entry.approvalStatus === "approved").length;
+  const draftCount = catalogue.filter((entry) => entry.approvalStatus === "draft").length;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
@@ -34,7 +47,7 @@ export default async function KpiCataloguePage() {
         <Link href={tenantHref("/dashboard")} className="text-sm font-semibold text-teal-deep hover:underline">View Pulse</Link>
       </div>
 
-      <section aria-label="Catalogue summary" className="mt-7 grid grid-cols-2 gap-3 sm:max-w-xl">
+      <section aria-label="Catalogue summary" className="mt-7 grid grid-cols-3 gap-3 sm:max-w-2xl">
         <article className="rounded-xl border border-line bg-panel p-4">
           <p className="text-xs uppercase tracking-wide text-muted">Definitions</p>
           <p className="mt-2 font-display text-3xl font-bold text-ink">{catalogue.length}</p>
@@ -43,7 +56,17 @@ export default async function KpiCataloguePage() {
           <p className="text-xs uppercase tracking-wide text-muted">Approved</p>
           <p className="mt-2 font-display text-3xl font-bold text-ink">{approvedCount}</p>
         </article>
+        <article className="rounded-xl border border-line bg-panel p-4">
+          <p className="text-xs uppercase tracking-wide text-muted">Drafts</p>
+          <p className="mt-2 font-display text-3xl font-bold text-ink">{draftCount}</p>
+        </article>
       </section>
+
+      <details className="mt-6 rounded-xl border border-line bg-panel p-5 sm:p-6">
+        <summary className="cursor-pointer font-display text-xl font-semibold text-ink">Create a governed KPI</summary>
+        <p className="mt-2 text-sm leading-6 text-muted">Analysts and Company Admins can prepare a complete draft. A Company Admin must review it before Pulse can use it.</p>
+        {datasets.length ? <KpiDefinitionForm action={createKpiDraftAction} datasets={datasets} /> : <p className="mt-4 text-sm text-danger">Publish a governed dataset in Connect before creating a KPI.</p>}
+      </details>
 
       {catalogue.length === 0 ? (
         <section className="mt-6 rounded-xl border border-dashed border-line bg-panel p-6 sm:p-8">
@@ -66,15 +89,37 @@ export default async function KpiCataloguePage() {
                     <span className="rounded-full bg-canvas px-2.5 py-1 text-[11px] text-muted">v{entry.version}</span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted">{entry.definition}</p>
+                  {entry.businessPurpose ? <p className="mt-2 text-xs leading-5 text-muted"><span className="font-semibold text-ink">Purpose:</span> {entry.businessPurpose}</p> : null}
                 </div>
                 <p className="shrink-0 font-mono text-xs text-muted">{entry.key}</p>
               </div>
               <dl className="mt-5 grid gap-4 border-t border-line pt-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 <div><dt className="text-xs text-muted">Dataset</dt><dd className="mt-1 font-semibold text-ink">{entry.dataset.name}</dd><dd className="text-xs text-muted">{entry.dataset.subjectArea}</dd></div>
                 <div><dt className="text-xs text-muted">Formula reference</dt><dd className="mt-1 font-semibold text-ink">{entry.formulaReference}</dd></div>
-                <div><dt className="text-xs text-muted">Owner</dt><dd className="mt-1 font-semibold text-ink">{entry.ownerName}</dd></div>
+                <div><dt className="text-xs text-muted">Owner / reviewer</dt><dd className="mt-1 font-semibold text-ink">{entry.ownerName}</dd><dd className="text-xs text-muted">{entry.reviewerName}</dd></div>
                 <div><dt className="text-xs text-muted">Refresh</dt><dd className="mt-1 font-semibold text-ink">{entry.dataset.refreshCadence}</dd></div>
               </dl>
+              {entry.approvalStatus === "draft" ? (
+                <div className="mt-5 border-t border-line pt-4">
+                  <details>
+                    <summary className="cursor-pointer text-sm font-semibold text-teal-deep">Edit complete draft contract</summary>
+                    <KpiDefinitionForm action={updateKpiDraftAction} datasets={datasets} definition={entry} />
+                  </details>
+                  {ctx.role === "company_admin" ? (
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <form action={approveKpiDraftAction}><input type="hidden" name="definitionId" value={entry.id} /><button className="rounded-lg bg-teal-deep px-4 py-2 text-sm font-semibold text-white">Approve and publish</button></form>
+                      <form action={rejectKpiDraftAction}><input type="hidden" name="definitionId" value={entry.id} /><button className="rounded-lg border border-line px-4 py-2 text-sm font-semibold text-danger">Reject draft</button></form>
+                    </div>
+                  ) : <p className="mt-3 text-xs text-muted">Waiting for Company Admin review.</p>}
+                </div>
+              ) : null}
+              {entry.approvalStatus === "approved" && entry.validTo === null ? (
+                <form action={createNextKpiVersionAction} className="mt-5 flex flex-col gap-3 border-t border-line pt-4 sm:flex-row sm:items-end">
+                  <input type="hidden" name="definitionId" value={entry.id} />
+                  <label className="text-sm font-semibold text-ink">Replacement effective from<input type="date" name="validFrom" required className="mt-1 block rounded-lg border border-line bg-white px-3 py-2 text-sm" /></label>
+                  <button className="rounded-lg border border-teal-deep px-4 py-2 text-sm font-semibold text-teal-deep">Draft v{entry.version + 1}</button>
+                </form>
+              ) : null}
             </article>
           ))}
         </section>
