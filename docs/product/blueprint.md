@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.0 |
+| Document status | Build-ready product definition — Version 2.1 |
 
 ### Changes since v1.0
 
@@ -71,6 +71,13 @@ This specification is designed to be handed to an AI software builder, technical
 - **The platform production domain is `hized.app`.** The apex hosts shared authentication and OAuth callbacks; tenant applications use `*.hized.app`. `hized.com` remains the separate marketing site.
 - **Connect is analyst-operated and adapter-neutral.** Company administrators authorise organisational connections and secrets; authorised analysts configure repeatable pipelines through a guided source, fields, load, validation, schedule and review flow. Salesforce and Zendesk are reference implementations of CRM/API adapter patterns, not an exhaustive connector promise.
 - **Hized-managed SQL is the default analytical destination.** CSV, Excel, Forms, SharePoint, CRM and API data are source deliveries into tenant-isolated governed storage. A customer does not need to operate SQL Server to use Hized; customer-owned SQL/warehouse extraction and paid Custom ETL remain supported integration options.
+
+### Changes since v2.0
+
+- **Pulse and Canvas are company-wide products, not admin-only tools.** Every active tenant member can enter Pulse and Canvas. What they can do is determined by their feature role; what data they can see is independently constrained by their assigned organisation scope and approved subject-area/metric permissions.
+- **Company Admin owns access setup.** Company Admins invite users and assign each member a role, status and primary organisation scope. A company-root scope provides company-wide visibility; division, function, department, region, site, team or employee scopes limit the user to that branch. The existing database model can hold additional scopes for later dotted-line access.
+- **Division is an explicit hierarchy node.** Organisation structures can model divisions directly rather than overloading function or department. The existing `employee` application role is presented to customers as **End user**; this is a product label, not a separate permission role.
+- **Tenant branding is Company Admin configuration.** A company can apply its logo, accessible brand colours and an approved typography choice across its tenant shell, Pulse and Canvas. Branding is tenant-scoped, previewable and resettable; it cannot inject arbitrary CSS/scripts, obscure security/status colours or alter another tenant or the Hized Platform Administration surface.
 
 ## 1. Product definition and positioning
 
@@ -139,7 +146,7 @@ The organisational hierarchy is a first-class data structure. Dashboards must no
 
 | ID | Requirement | Priority | Acceptance signal |
 |---|---|---|---|
-| ORG-001 | Support an arbitrary, acyclic organisation tree with company, function, department, region/site, manager, team and employee nodes. | Must | An administrator can create, move and deactivate nodes without code changes, and a node cannot be moved beneath itself or a descendant. |
+| ORG-001 | Support an arbitrary, acyclic organisation tree with company, division, function, department, region/site, manager, team and employee nodes. | Must | An administrator can create, move and deactivate nodes without code changes, and a node cannot be moved beneath itself or a descendant. |
 | ORG-002 | Associate users, employees, targets, KPIs and source records with one or more organisation nodes. | Must | A metric can be filtered and aggregated at each hierarchy level. |
 | ORG-003 | Allow authorised users to drill from an aggregate result into lower levels and supporting records. | Must | An executive can move from company to region to team to employee where permitted. |
 | ORG-004 | Support effective dates for hierarchy changes using half-open intervals (`valid_from <= date < valid_to`). | Should | Historical results remain attributed to exactly one correct structure for the selected period; the effective-date boundary never exposes both old and new scope paths. |
@@ -154,23 +161,40 @@ The organisational hierarchy is a first-class data structure. Dashboards must no
 | Executive | Board and senior leadership | Understand company health, strategic targets, risks and exceptions | Revenue, profit, cash, customer, workforce, delivery |
 | Functional Leader | Head of department or region | Manage performance, capacity and root causes within a defined scope | Department outcomes, teams, forecasts, risks |
 | Manager / Team Leader | Operational people manager | Run daily or weekly performance and coach teams | Backlog, productivity, quality, attendance, SLA |
-| Employee | Individual contributor | See personal goals, output, quality and trend where appropriate | Personal target attainment and quality measures |
+| End user (`employee` role) | Individual contributor | See approved personal or team goals, output, quality and trend within their assigned scope | Personal target attainment and quality measures |
 | Analyst | Client or Hized analyst | Explore governed data, build self-serve dashboards in Hized Canvas and validate metrics | Dataset usage, query performance, data quality |
 
 ### 3.3 Access control model
 
-- Role-based access controls define which features a user can use.
-- Organisation scope defines which rows and hierarchy branches a user can see.
+- Every active tenant member can enter Hized Pulse and Hized Canvas; neither product is reserved for administrators.
+- Company Admins configure invitations, membership status, feature role and organisation scope. Suspending a membership removes tenant access without deleting its audit history.
+- Role-based access controls define which features and actions a user can use. The initial tenant roles are Company Admin, Executive, Functional Leader, Manager, End user (`employee`) and Analyst.
+- Organisation scope independently defines which rows and hierarchy branches a user can see. A company-root assignment grants whole-company scope; a lower node limits the user to that node and its descendants.
+- Every non-admin member must have a primary scope. Company Admins are tenant-wide by definition and do not rely on a scope row for access.
 - Dashboard and module permissions define which subject areas are visible.
 - Column and metric restrictions protect salary, HR, health, disciplinary and commercially sensitive data.
 - Employee-facing views must only expose approved metrics and comparisons.
 - All permission changes, exports and sensitive drill-through actions must be audited.
 - Invitation tokens are bearer secrets: possession of the invited email address alone never grants signup or tenant membership. Existing authenticated users can accept a valid invitation into an additional tenant without creating a second identity.
 
+### 3.4 Tenant branding
+
+Company Admins can make the client-facing tenant feel like their organisation while Hized retains safe, legible product structure. This is tenant customisation, not an arbitrary white-label code surface.
+
+| ID | Requirement | Priority | Acceptance signal |
+|---|---|---|---|
+| BRAND-001 | Upload a tenant logo for the authenticated shell, Pulse and Canvas, with a text-name fallback. | Must | A valid PNG or WebP logo is stored in Hized-managed object storage and appears only in that tenant; unsafe or oversized files are rejected. SVG may follow only with explicit sanitisation. |
+| BRAND-002 | Configure primary and accent colours through validated colour fields. | Must | A preview shows the applied theme, text/background combinations retain agreed accessible contrast, and semantic success/warning/error colours remain distinguishable. |
+| BRAND-003 | Choose typography from a curated, locally hosted set of readable families. | Should | The selected heading/body family loads without a third-party tracking request or layout-breaking arbitrary font/CSS input. |
+| BRAND-004 | Preview, publish and reset branding, with each published change audited. | Must | Users see only the latest published tenant theme; an admin can restore Hized defaults and the audit log records actor and changed fields. |
+
+Brand settings never change authentication, authorisation or row visibility. The Hized Platform Administration surface remains Hized-branded so support operators always know they are outside a client tenant.
+
 ## 4. Hized Pulse functional scope
 
 ### 4.1 Home and company pulse
 
+- Pulse is available to every active tenant member. Its landing content, drill paths and underlying records must respect both the member's role and current organisation scope.
 - Role-aware landing page with the user's most important KPIs, alerts, saved views and recent reports.
 - Company health summary built from configurable weighted KPI groups; the score must show its components and never be a black box.
 - Target versus actual, period comparison, trend direction, confidence or freshness indicator and owner for each KPI.
@@ -686,7 +710,6 @@ This requirement is delivered progressively by the epic that owns each schema. E
 
 - Exact early-client industry focus and first reusable dashboard template.
 - Shared analytical database versus database-per-tenant options at different commercial tiers.
-- Whether employee self-service is enabled by default or only where explicitly configured.
 - Whether Canvas board promotion (CANVAS-005) requires Company Admin approval only, or also a Hized-side review during the pilot phase.
 - Level of client self-configuration versus Hized-managed configuration in the first two years.
 - Pricing model: per tenant, per user, per connector, data volume, managed service tier or hybrid.

@@ -1,5 +1,6 @@
 export type OrgNodeType =
   | "company"
+  | "division"
   | "function"
   | "department"
   | "region"

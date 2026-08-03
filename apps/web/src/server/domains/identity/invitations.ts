@@ -28,12 +28,21 @@ export async function createInvitation(
   client: PoolClient,
   opts: { tenantId: string; email: string; role: AppRole; orgNodeId?: string; invitedBy: string },
 ): Promise<{ invitationId: string; rawToken: string; inviteUrl: string }> {
+  if (opts.role !== "company_admin" && !opts.orgNodeId) {
+    throw new Error("Choose an organisation scope for every non-admin invitation.");
+  }
   if (opts.orgNodeId) {
     const { rowCount } = await client.query(
-      "select 1 from public.org_nodes where id = $1 and tenant_id = $2",
+      `select 1
+       from public.org_nodes n
+       join public.org_node_versions v on v.org_node_id = n.id
+         and v.tenant_id = n.tenant_id
+         and v.valid_from <= current_date
+         and (v.valid_to is null or v.valid_to > current_date)
+       where n.id = $1 and n.tenant_id = $2`,
       [opts.orgNodeId, opts.tenantId],
     );
-    if (rowCount === 0) throw new Error("Invitation scope does not belong to this tenant.");
+    if (rowCount === 0) throw new Error("Invitation scope is inactive or does not belong to this company.");
   }
   const rawToken = randomBytes(RAW_TOKEN_BYTES).toString("base64url");
   const { rows: [row] } = await client.query(

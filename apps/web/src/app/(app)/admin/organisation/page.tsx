@@ -4,7 +4,16 @@ import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-
 import { listOrgTree } from "@/server/domains/organisation/org-nodes";
 import { createNodeAction, deactivateNodeAction } from "./actions";
 
-const NODE_TYPES: OrgNodeType[] = ["company", "function", "department", "region", "site", "team", "employee"];
+const NODE_TYPES: OrgNodeType[] = [
+  "company",
+  "division",
+  "function",
+  "department",
+  "region",
+  "site",
+  "team",
+  "employee",
+];
 
 function buildChildren(nodes: OrgNode[]): Map<string | null, OrgNode[]> {
   const byParent = new Map<string | null, OrgNode[]>();

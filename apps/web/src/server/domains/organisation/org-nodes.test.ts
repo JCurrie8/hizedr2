@@ -53,16 +53,29 @@ describe("org hierarchy: create, effective-dating, move-cascade, scope", () => {
     await admin.end();
   });
 
-  it("creates a company -> department -> team -> employee chain with correct ltree paths", async () => {
+  it("creates a company -> division -> department -> team -> employee chain with correct ltree paths", async () => {
     const tree = await withUserContext({ userId: adminProfileId, tenantId }, async (c) => {
       const company = await createOrgNode(c, { tenantId, nodeType: "company", name: "Acme" });
-      const dept = await createOrgNode(c, { tenantId, nodeType: "department", name: "Ops", parentId: company.orgNodeId });
+      const division = await createOrgNode(c, {
+        tenantId,
+        nodeType: "division",
+        name: "UK Services",
+        parentId: company.orgNodeId,
+      });
+      const dept = await createOrgNode(c, {
+        tenantId,
+        nodeType: "department",
+        name: "Ops",
+        parentId: division.orgNodeId,
+      });
       const team = await createOrgNode(c, { tenantId, nodeType: "team", name: "Install Team", parentId: dept.orgNodeId });
       const employee = await createOrgNode(c, { tenantId, nodeType: "employee", name: "Jamie", parentId: team.orgNodeId });
-      return { company, dept, team, employee };
+      return { company, division, dept, team, employee };
     });
 
-    expect(tree.team.path).toBe(`${tree.company.path}.${tree.dept.path.split(".").pop()}.${tree.team.path.split(".").pop()}`);
+    expect(tree.team.path).toBe(
+      `${tree.company.path}.${tree.division.path.split(".").pop()}.${tree.dept.path.split(".").pop()}.${tree.team.path.split(".").pop()}`,
+    );
     expect(tree.employee.path.startsWith(`${tree.team.path}.`)).toBe(true);
   });
 
@@ -127,8 +140,8 @@ describe("org hierarchy: create, effective-dating, move-cascade, scope", () => {
 
     // Scope the manager to the team BEFORE the move.
     await admin.query(
-      `insert into public.membership_scopes (membership_id, org_node_id)
-       select id, $1 from public.tenant_memberships where tenant_id = $2 and user_id = $3`,
+      `insert into public.membership_scopes (membership_id, org_node_id, is_primary)
+       select id, $1, false from public.tenant_memberships where tenant_id = $2 and user_id = $3`,
       [team.orgNodeId, tenantId, managerProfileId],
     );
 
