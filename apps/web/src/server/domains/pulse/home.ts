@@ -5,6 +5,7 @@ import {
   type ConnectorOverview,
   type PipelineRunOverview,
 } from "../connectors/connectors";
+import { listPulseKpiCards, type PulseKpiCard } from "./kpis";
 
 export interface PulseHomeSnapshot {
   organisation: {
@@ -12,6 +13,7 @@ export interface PulseHomeSnapshot {
     teams: number;
     employees: number;
   };
+  kpis: PulseKpiCard[];
   connect: null | {
     connectors: ConnectorOverview[];
     recentRuns: PipelineRunOverview[];
@@ -47,8 +49,10 @@ export async function getPulseHomeSnapshot(
     employees: Number(organisation?.employees ?? 0),
   };
 
+  const kpis = await listPulseKpiCards(client, { tenantId: input.tenantId });
+
   if (!input.includeConnectHealth) {
-    return { organisation: organisationSummary, connect: null };
+    return { organisation: organisationSummary, kpis, connect: null };
   }
 
   const [connectors, recentRuns] = await Promise.all([
@@ -61,6 +65,7 @@ export async function getPulseHomeSnapshot(
 
   return {
     organisation: organisationSummary,
+    kpis,
     connect: {
       connectors,
       recentRuns,

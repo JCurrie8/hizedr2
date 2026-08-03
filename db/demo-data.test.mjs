@@ -19,6 +19,17 @@ test("the installation demo exposes the Phase 0 hierarchy needed for later KPI s
   }
 });
 
+test("the Pulse demo owns governed KPI definitions, target variance and a stale source", () => {
+  const northstar = demoTenants[0];
+  assert.equal(northstar.datasets.length, 2);
+  assert.equal(northstar.kpis.length, 2);
+  const completion = northstar.kpis.find((kpi) => kpi.key === "first_time_completion");
+  assert.ok(completion);
+  assert.ok(completion.values.some((value) => value.actual < value.target));
+  const staleDataset = northstar.datasets.find((dataset) => dataset.key === "customer_service_performance");
+  assert.equal(staleDataset.sourceAge, "3 days");
+});
+
 test("no node can reference the other tenant's hierarchy", () => {
   const firstIds = new Set(demoTenants[0].nodes.map((node) => node.id));
   const secondIds = new Set(demoTenants[1].nodes.map((node) => node.id));

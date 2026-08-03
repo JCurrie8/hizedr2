@@ -19,7 +19,10 @@ function printPlan(target) {
       result[node.type] = (result[node.type] ?? 0) + 1;
       return result;
     }, {});
-    console.log(`- ${tenant.name} [${tenant.slug}]: ${tenant.nodes.length} nodes`, counts);
+    console.log(
+      `- ${tenant.name} [${tenant.slug}]: ${tenant.nodes.length} nodes, ${tenant.datasets.length} datasets, ${tenant.kpis.length} KPIs`,
+      counts,
+    );
   }
 }
 
@@ -103,12 +106,94 @@ async function upsertTenant(client, tenant, target) {
     );
   }
 
+  for (const dataset of tenant.datasets) {
+    await client.query(
+      `insert into public.governed_datasets
+         (id, tenant_id, dataset_key, name, subject_area, status, refresh_cadence,
+          expected_latency, last_refreshed_at, created_by, updated_by)
+       values ($1, $2, $3, $4, $5, 'published', $6, $7::interval,
+               now() - $8::interval, $9, $9)
+       on conflict (id) do nothing`,
+      [
+        dataset.id,
+        tenant.id,
+        dataset.key,
+        dataset.name,
+        dataset.subjectArea,
+        dataset.refreshCadence,
+        dataset.expectedLatency,
+        dataset.sourceAge,
+        tenant.seedPrincipal.profileId,
+      ],
+    );
+  }
+
+  const datasetsById = new Map(tenant.datasets.map((dataset) => [dataset.id, dataset]));
+  for (const kpi of tenant.kpis) {
+    const dataset = datasetsById.get(kpi.datasetId);
+    await client.query(
+      `insert into public.kpi_definitions
+         (id, tenant_id, dataset_id, kpi_key, version_number, name, definition,
+          business_purpose, formula_reference, owner_name, unit, decimal_places,
+          favourable_direction, aggregation, refresh_cadence, thresholds,
+          valid_from, approval_status, approved_by, approved_at, created_by)
+       values ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11,
+               $12, $13, $14, $15::jsonb, $16, 'approved', $17, now(), $17)
+       on conflict (id) do nothing`,
+      [
+        kpi.id,
+        tenant.id,
+        kpi.datasetId,
+        kpi.key,
+        kpi.name,
+        kpi.definition,
+        kpi.businessPurpose,
+        kpi.formulaReference,
+        kpi.ownerName,
+        kpi.unit,
+        kpi.decimalPlaces,
+        kpi.favourableDirection,
+        kpi.aggregation,
+        dataset.refreshCadence,
+        JSON.stringify(kpi.thresholds),
+        DEMO_VALID_FROM,
+        tenant.seedPrincipal.profileId,
+      ],
+    );
+
+    for (const value of kpi.values) {
+      await client.query(
+        `insert into public.kpi_values
+           (id, tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
+            actual_value, target_value, prior_period_value, numerator_value,
+            denominator_value, source_refreshed_at, calculated_by)
+         values ($1, $2, $3, $4, current_date - 7, current_date, $5, $6, $7,
+                 $8, $9, now() - $10::interval, $11)
+         on conflict (id) do nothing`,
+        [
+          value.id,
+          tenant.id,
+          kpi.id,
+          value.orgNodeId,
+          value.actual,
+          value.target,
+          value.prior,
+          value.numerator ?? null,
+          value.denominator ?? null,
+          dataset.sourceAge,
+          tenant.seedPrincipal.profileId,
+        ],
+      );
+    }
+  }
+
   await client.query(
     `insert into public.audit_log
        (tenant_id, actor_user_id, action, target_type, target_id, metadata)
      values ($1, $2, 'demo.seeded', 'tenant', $5,
-       jsonb_build_object('seedVersion', $3::text, 'target', $4::text))`,
-    [tenant.id, principal.profileId, DEMO_SEED_VERSION, target, tenant.id],
+       jsonb_build_object('seedVersion', $3::text, 'target', $4::text,
+                          'datasets', $6::integer, 'kpis', $7::integer))`,
+    [tenant.id, principal.profileId, DEMO_SEED_VERSION, target, tenant.id, tenant.datasets.length, tenant.kpis.length],
   );
 }
 

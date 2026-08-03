@@ -5,6 +5,13 @@ import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 
 const settings = [
   {
+    title: "KPI catalogue",
+    description: "Review governed definitions, versions, owners and source datasets.",
+    path: "/admin/kpis",
+    adminOnly: false,
+    allowedRoles: ["company_admin", "analyst"],
+  },
+  {
     title: "Organisation",
     description: "Departments, divisions, regions, teams and reporting structure.",
     path: "/admin/organisation",
@@ -37,7 +44,10 @@ export default async function SettingsPage() {
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });
-  const visibleSettings = settings.filter((item) => !item.adminOnly || ctx.role === "company_admin");
+  const visibleSettings = settings.filter((item) => {
+    if ("allowedRoles" in item) return item.allowedRoles.some((role) => role === ctx.role);
+    return !item.adminOnly || ctx.role === "company_admin";
+  });
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-12">

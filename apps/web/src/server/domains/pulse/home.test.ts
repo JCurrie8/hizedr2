@@ -45,6 +45,7 @@ describe("Pulse home snapshot", () => {
       });
       expect(snapshot).toEqual({
         organisation: { visibleNodes: 2, teams: 1, employees: 0 },
+        kpis: [],
         connect: null,
       });
     });
@@ -64,6 +65,7 @@ describe("Pulse home snapshot", () => {
         includeConnectHealth: true,
       });
       expect(snapshot.organisation).toEqual({ visibleNodes: 2, teams: 1, employees: 0 });
+      expect(snapshot.kpis).toEqual([]);
       expect(snapshot.connect).toMatchObject({
         pipelineCount: 1,
         failedRuns: 0,

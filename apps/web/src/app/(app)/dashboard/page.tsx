@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { getPulseHomeSnapshot } from "@/server/domains/pulse/home";
+import { targetState, type PulseKpiCard } from "@/server/domains/pulse/kpis";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { redirect } from "next/navigation";
@@ -13,6 +14,26 @@ function formatDateTime(value: string, timezone: string): string {
     timeStyle: "short",
     timeZone: timezone,
   }).format(new Date(value));
+}
+
+function formatKpiValue(kpi: PulseKpiCard, value: number): string {
+  if (kpi.unit === "percentage") return `${value.toFixed(kpi.decimalPlaces)}%`;
+  if (kpi.unit === "currency") {
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency: kpi.currencyCode ?? "GBP",
+      maximumFractionDigits: kpi.decimalPlaces,
+    }).format(value);
+  }
+  return new Intl.NumberFormat("en-GB", {
+    minimumFractionDigits: kpi.decimalPlaces,
+    maximumFractionDigits: kpi.decimalPlaces,
+  }).format(value);
+}
+
+function formatPeriod(end: string): string {
+  return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "UTC" })
+    .format(new Date(`${end}T00:00:00Z`));
 }
 
 export default async function DashboardPage() {
@@ -36,8 +57,10 @@ export default async function DashboardPage() {
   if (!snapshot) redirect(tenantHref("/home"));
   const firstName = ctx.fullName?.trim().split(/\s+/)[0] ?? null;
   const connect = snapshot.connect;
+  const kpis = snapshot.kpis;
   const hasCompletedRun = connect?.recentRuns.some((run) => run.status === "succeeded" || run.status === "warning") ?? false;
-  const attentionCount = (connect?.failedRuns ?? 0) + (connect?.warningRuns ?? 0);
+  const kpisNeedingAttention = kpis.filter((kpi) => targetState(kpi) === "off_track" || kpi.freshness.status === "stale");
+  const attentionCount = (connect?.failedRuns ?? 0) + (connect?.warningRuns ?? 0) + kpisNeedingAttention.length;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
@@ -62,13 +85,17 @@ export default async function DashboardPage() {
           <div>
             <h2 className="font-display text-lg font-semibold text-ink">
               {attentionCount > 0
-                ? `${attentionCount} recent data run${attentionCount === 1 ? " needs" : "s need"} attention`
-                : hasCompletedRun
+                ? `${attentionCount} performance or data item${attentionCount === 1 ? " needs" : "s need"} attention`
+                : kpis.length > 0
+                  ? "Performance is on track and the supporting data is fresh"
+                  : hasCompletedRun
                   ? "Your data foundation is refreshing"
                   : "Your performance workspace is ready to configure"}
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              {connect?.latestRunAt
+              {kpis.length > 0
+                ? `${kpis.length} governed KPI${kpis.length === 1 ? " is" : "s are"} published for ${kpis[0]?.organisation.name ?? "your scope"}. Every number retains its definition, target, owner and freshness.`
+                : connect?.latestRunAt
                 ? `Latest observed pipeline activity: ${formatDateTime(connect.latestRunAt, ctx.tenant.timezone)}.`
                 : includeConnectHealth
                   ? "Connect the first operational source, then publish governed KPIs into this Pulse view."
@@ -83,7 +110,7 @@ export default async function DashboardPage() {
           ["Visible structure", snapshot.organisation.visibleNodes.toLocaleString("en-GB"), "organisation nodes in your scope"],
           ["Teams", snapshot.organisation.teams.toLocaleString("en-GB"), "available for drill-down"],
           ["People", snapshot.organisation.employees.toLocaleString("en-GB"), "employee nodes in scope"],
-          [includeConnectHealth ? "Pipelines" : "KPI catalogue", includeConnectHealth ? String(connect?.pipelineCount ?? 0) : "—", includeConnectHealth ? "configured data flows" : "awaiting publication"],
+          ["Published KPIs", kpis.length.toLocaleString("en-GB"), kpis.length ? "at your landing scope" : "awaiting publication"],
         ].map(([label, value, hint]) => (
           <article key={label} className="rounded-xl border border-line bg-panel p-4 sm:p-5">
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">{label}</p>
@@ -92,6 +119,69 @@ export default async function DashboardPage() {
           </article>
         ))}
       </section>
+
+      {kpis.length > 0 && (
+        <section aria-labelledby="performance-heading" className="mt-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.16em] text-teal-deep">Governed performance</p>
+              <h2 id="performance-heading" className="mt-1 font-display text-2xl font-semibold text-ink">
+                {kpis[0]?.organisation.name}
+              </h2>
+            </div>
+            <p className="text-xs text-muted">Latest approved period per KPI</p>
+          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {kpis.map((kpi) => {
+              const state = targetState(kpi);
+              const variance = kpi.targetValue === null ? null : kpi.actualValue - kpi.targetValue;
+              return (
+                <article key={kpi.definitionId} className="rounded-xl border border-line bg-panel p-5 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="font-display text-lg font-semibold text-ink">{kpi.name}</h3>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{kpi.definition}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                      state === "off_track" ? "bg-amber-100 text-amber-900" : state === "on_track" ? "bg-emerald-100 text-emerald-900" : "bg-canvas text-muted"
+                    }`}>
+                      {state === "off_track" ? "Needs attention" : state === "on_track" ? "On track" : "No target"}
+                    </span>
+                  </div>
+                  <div className="mt-5 flex items-end justify-between gap-4">
+                    <p className="font-display text-4xl font-bold tracking-tight text-ink">{formatKpiValue(kpi, kpi.actualValue)}</p>
+                    {variance !== null && (
+                      <p className={`pb-1 text-right text-sm font-semibold ${state === "off_track" ? "text-danger" : "text-teal-deep"}`}>
+                        {variance > 0 ? "+" : ""}{formatKpiValue(kpi, variance)} vs target
+                      </p>
+                    )}
+                  </div>
+                  <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-line pt-4 text-xs">
+                    <div>
+                      <dt className="text-muted">Target</dt>
+                      <dd className="mt-1 font-semibold text-ink">{kpi.targetValue === null ? "Not set" : formatKpiValue(kpi, kpi.targetValue)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted">Period ending</dt>
+                      <dd className="mt-1 font-semibold text-ink">{formatPeriod(kpi.periodEnd)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted">Owner</dt>
+                      <dd className="mt-1 font-semibold text-ink">{kpi.ownerName}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted">Freshness</dt>
+                      <dd className={`mt-1 font-semibold ${kpi.freshness.status === "stale" ? "text-danger" : "text-teal-deep"}`}>
+                        {kpi.freshness.status === "stale" ? "Stale" : "Fresh"}
+                      </dd>
+                    </div>
+                  </dl>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[1.35fr_0.65fr]">
         <section className="rounded-xl border border-line bg-panel p-5 sm:p-6">
@@ -121,9 +211,9 @@ export default async function DashboardPage() {
               {
                 title: "Governed KPIs",
                 description: "Agree definitions, owners, targets and thresholds once, then reuse them across Pulse.",
-                complete: false,
-                href: null,
-                action: "Next build slice",
+                complete: kpis.length > 0,
+                href: includeConnectHealth ? tenantHref("/admin/kpis") : null,
+                action: kpis.length > 0 ? "Review catalogue" : "Set up catalogue",
               },
             ].map((step, index) => (
               <li key={step.title} className="flex gap-4 border-b border-line pb-4 last:border-b-0 last:pb-0">

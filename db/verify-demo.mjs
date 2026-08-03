@@ -31,6 +31,20 @@ for (const tenant of demoTenants) {
     throw new Error(`${tenant.slug} hierarchy did not resolve to its ${tenant.nodes.length} isolated nodes.`);
   }
 
+  const visibleKpis = await withUserContext(
+    { userId: tenant.seedPrincipal.profileId, tenantId: tenant.id },
+    async (client) => (
+      await client.query(
+        `select definition.id, definition.tenant_id
+         from public.kpi_definitions definition
+         where definition.approval_status = 'approved'`,
+      )
+    ).rows,
+  );
+  if (visibleKpis.length !== tenant.kpis.length || visibleKpis.some((kpi) => kpi.tenant_id !== tenant.id)) {
+    throw new Error(`${tenant.slug} KPI catalogue did not resolve to its ${tenant.kpis.length} isolated definitions.`);
+  }
+
   const other = demoTenants.find((candidate) => candidate.id !== tenant.id);
   const crossTenantNodes = await withUserContext(
     { userId: tenant.seedPrincipal.profileId, tenantId: other.id },
@@ -40,5 +54,5 @@ for (const tenant of demoTenants) {
     throw new Error(`${tenant.slug} seed principal can read ${other.slug} hierarchy rows.`);
   }
 
-  console.log(`ok ${tenant.slug}: one tenant, ${visibleNodes.length} own nodes, zero cross-tenant nodes`);
+  console.log(`ok ${tenant.slug}: one tenant, ${visibleNodes.length} own nodes, ${visibleKpis.length} own KPIs, zero cross-tenant nodes`);
 }
