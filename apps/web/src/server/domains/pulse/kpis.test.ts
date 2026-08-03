@@ -72,12 +72,12 @@ describe("governed Pulse KPI cards", () => {
     const { rows: [approved] } = await admin.query(
       `insert into public.kpi_definitions
          (tenant_id, dataset_id, kpi_key, version_number, name, definition,
-          formula_reference, owner_name, unit, decimal_places, favourable_direction,
+          formula_reference, owner_name, reviewer_name, unit, decimal_places, favourable_direction,
           aggregation, refresh_cadence, audience_roles, valid_from, approval_status,
           approved_by, approved_at, created_by)
        values ($1, $2, 'first_time_completion', 1, 'First-time completion',
                'Completed jobs without a repeat visit.', 'first_time / completed',
-               'Head of Operations', 'percentage', 1, 'higher', 'ratio', 'Daily',
+               'Head of Operations', 'Managing Director', 'percentage', 1, 'higher', 'ratio', 'Daily',
                enum_range(null::public.app_role), current_date - 30, 'approved', $3, now(), $3)
        returning id`,
       [fixture.tenantId, dataset.id, fixture.profileId],
@@ -85,11 +85,11 @@ describe("governed Pulse KPI cards", () => {
     const { rows: [executiveOnly] } = await admin.query(
       `insert into public.kpi_definitions
          (tenant_id, dataset_id, kpi_key, version_number, name, definition,
-          formula_reference, owner_name, unit, favourable_direction, aggregation,
+          formula_reference, owner_name, reviewer_name, unit, favourable_direction, aggregation,
           refresh_cadence, audience_roles, valid_from, approval_status,
           approved_by, approved_at, created_by)
        values ($1, $2, 'commercial_margin', 1, 'Commercial margin', 'Approved margin.',
-               'margin / revenue', 'Finance Director', 'percentage', 'higher', 'ratio',
+               'margin / revenue', 'Finance Director', 'Managing Director', 'percentage', 'higher', 'ratio',
                'Daily', array['executive']::public.app_role[], current_date - 30,
                'approved', $3, now(), $3)
        returning id`,

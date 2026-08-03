@@ -134,11 +134,11 @@ async function upsertTenant(client, tenant, target) {
     await client.query(
       `insert into public.kpi_definitions
          (id, tenant_id, dataset_id, kpi_key, version_number, name, definition,
-          business_purpose, formula_reference, owner_name, unit, decimal_places,
+          business_purpose, formula_reference, owner_name, reviewer_name, unit, decimal_places,
           favourable_direction, aggregation, refresh_cadence, thresholds,
           valid_from, approval_status, approved_by, approved_at, created_by)
-       values ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11,
-               $12, $13, $14, $15::jsonb, $16, 'approved', $17, now(), $17)
+       values ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11, $12,
+               $13, $14, $15, $16::jsonb, $17, 'approved', $18, now(), $18)
        on conflict (id) do nothing`,
       [
         kpi.id,
@@ -150,6 +150,7 @@ async function upsertTenant(client, tenant, target) {
         kpi.businessPurpose,
         kpi.formulaReference,
         kpi.ownerName,
+        kpi.reviewerName,
         kpi.unit,
         kpi.decimalPlaces,
         kpi.favourableDirection,
