@@ -39,6 +39,25 @@ describe("RLS tenant isolation", () => {
       role: "employee",
     });
 
+    await admin.query(
+      `insert into public.tenant_branding (tenant_id, primary_color, accent_color, typography, published_by)
+       values ($1, '#112233', '#335577', 'clean', $2),
+              ($3, '#223344', '#446688', 'geometric', $4),
+              ($5, '#334455', '#557799', 'hized', $6)`,
+      [
+        tenantA.tenantId, tenantA.profileId,
+        tenantB.tenantId, tenantB.profileId,
+        tenantEmployee.tenantId, tenantEmployee.profileId,
+      ],
+    );
+    await admin.query(
+      `insert into public.tenant_branding_drafts
+         (tenant_id, primary_color, accent_color, typography, updated_by)
+       values ($1, '#111111', '#555555', 'clean', $2),
+              ($3, '#222222', '#666666', 'geometric', $4)`,
+      [tenantA.tenantId, tenantA.profileId, tenantB.tenantId, tenantB.profileId],
+    );
+
     const { rows: [connectorA] } = await admin.query(
       `insert into public.connectors (tenant_id, connector_type, name, created_by)
        values ($1, 'salesforce', 'Salesforce A', $2) returning id`,
@@ -351,6 +370,66 @@ describe("RLS tenant isolation", () => {
     }
   });
 
+  it("published branding is member-readable but drafts remain Company Admin-only", async () => {
+    const published = await withUserContext(
+      { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+      (client) => client.query("select tenant_id, primary_color from public.tenant_branding").then((result) => result.rows),
+    );
+    expect(published).toEqual([{ tenant_id: tenantEmployee.tenantId, primary_color: "#334455" }]);
+
+    const drafts = await withUserContext(
+      { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+      (client) => client.query("select tenant_id from public.tenant_branding_drafts").then((result) => result.rows),
+    );
+    expect(drafts).toHaveLength(0);
+
+    await expect(withUserContext(
+      { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+      (client) => client.query(
+        `insert into public.tenant_branding_drafts (tenant_id, updated_by)
+         values ($1, $2)`,
+        [tenantEmployee.tenantId, tenantEmployee.profileId],
+      ),
+    )).rejects.toThrow(/row-level security/);
+  });
+
+  it("a multi-tenant Company Admin sees and updates branding only in the selected tenant", async () => {
+    await admin.query(
+      "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'company_admin', 'active')",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    try {
+      const scopedToA = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        async (client) => {
+          const published = await client.query("select tenant_id from public.tenant_branding order by tenant_id");
+          const drafts = await client.query("select tenant_id from public.tenant_branding_drafts order by tenant_id");
+          const crossTenantUpdate = await client.query(
+            "update public.tenant_branding set primary_color = '#000000' where tenant_id = $1",
+            [tenantB.tenantId],
+          );
+          return { published: published.rows, drafts: drafts.rows, crossTenantUpdate: crossTenantUpdate.rowCount };
+        },
+      );
+      expect(scopedToA).toEqual({
+        published: [{ tenant_id: tenantA.tenantId }],
+        drafts: [{ tenant_id: tenantA.tenantId }],
+        crossTenantUpdate: 0,
+      });
+
+      const scopedToB = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantB.tenantId },
+        (client) => client.query("select tenant_id from public.tenant_branding").then((result) => result.rows),
+      );
+      expect(scopedToB).toEqual([{ tenant_id: tenantB.tenantId }]);
+    } finally {
+      await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [
+        tenantB.tenantId,
+        tenantA.profileId,
+      ]);
+    }
+  });
+
   it("pipeline mappings and immutable versions remain scoped to the selected tenant", async () => {
     await admin.query(
       "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'analyst', 'active')",
@@ -414,6 +493,38 @@ describe("RLS tenant isolation", () => {
         ),
       ),
     ).rejects.toThrow(/row-level security/);
+  });
+
+  it("product entitlements are selected-tenant only and cannot be changed by a Company Admin", async () => {
+    const tenantARows = await withUserContext(
+      { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+      (client) => client.query(
+        "select tenant_id, product_key, status from public.tenant_product_entitlements order by product_key",
+      ).then((result) => result.rows),
+    );
+    expect(tenantARows).toEqual([
+      { tenant_id: tenantA.tenantId, product_key: "canvas", status: "locked" },
+      { tenant_id: tenantA.tenantId, product_key: "connect", status: "active" },
+      { tenant_id: tenantA.tenantId, product_key: "pulse", status: "active" },
+    ]);
+
+    const crossTenantUpdate = await withUserContext(
+      { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+      (client) => client.query(
+        "update public.tenant_product_entitlements set status = 'active' where tenant_id = $1 and product_key = 'canvas'",
+        [tenantB.tenantId],
+      ).then((result) => result.rowCount),
+    );
+    expect(crossTenantUpdate).toBe(0);
+
+    const ownTenantUpdate = await withUserContext(
+      { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+      (client) => client.query(
+        "update public.tenant_product_entitlements set status = 'active' where tenant_id = $1 and product_key = 'canvas'",
+        [tenantA.tenantId],
+      ).then((result) => result.rowCount),
+    );
+    expect(ownTenantUpdate).toBe(0);
   });
 
   it("deduplicates an unchanged source item by connector, item id, and content hash", async () => {

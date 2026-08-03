@@ -57,11 +57,11 @@ describe("tenant proxy", () => {
     expect(response.headers.get("location")).toBe("https://hized.app/organisations");
   });
 
-  it("routes a tenant root directly into Pulse", () => {
+  it("routes a tenant root into the product hub", () => {
     const response = proxy(
       new NextRequest("https://northstar.hized.app/", { headers: { host: "northstar.hized.app" } }),
     );
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("https://northstar.hized.app/dashboard");
+    expect(response.headers.get("location")).toBe("https://northstar.hized.app/home");
   });
 });

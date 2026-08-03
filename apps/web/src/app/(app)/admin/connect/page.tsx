@@ -10,6 +10,8 @@ import {
 import { microsoftConnectorEnvironmentReady } from "@/server/domains/connectors/microsoft-oauth";
 import { listMicrosoftConnectors } from "@/server/domains/connectors/sharepoint-connectors";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
+import { hasProductAccess } from "@/server/domains/products/entitlements";
+import { redirect } from "next/navigation";
 import {
   beginMicrosoftConnectionAction,
   configureMicrosoftWorkbookAction,
@@ -33,20 +35,25 @@ export default async function ConnectPage() {
     return <div className="mx-auto w-full max-w-4xl px-6 py-10 text-sm text-muted">Connect is available to company admins and analysts.</div>;
   }
 
-  const [requestHeaders, { connectors, filePipelines, microsoftConnectors, recentRuns }] = await Promise.all([
+  const [requestHeaders, connectData] = await Promise.all([
     headers(),
     withUserContext(
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
-      async (client) => ({
-        connectors: await listConnectorOverview(client, { tenantId: ctx.tenant.id }),
-        filePipelines: await listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
-        microsoftConnectors: await listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
-        recentRuns: await listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
-      }),
+      async (client) => {
+        if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
+        return {
+          connectors: await listConnectorOverview(client, { tenantId: ctx.tenant.id }),
+          filePipelines: await listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
+          microsoftConnectors: await listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
+          recentRuns: await listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
+        };
+      },
     ),
   ]);
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
+  if (!connectData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
+  const { connectors, filePipelines, microsoftConnectors, recentRuns } = connectData;
   const pipelineHref = (pipelineId: string) => tenantAppUrl({
     slug: ctx.tenant.slug,
     host,

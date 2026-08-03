@@ -19,6 +19,7 @@ import {
 } from "./sharepoint-connectors";
 import { parseTabularFile } from "./tabular-file";
 import { deleteR2Object, uploadR2Object } from "../../storage/r2";
+import { assertProductAccess } from "../products/entitlements";
 
 function safeStorageFileName(fileName: string): string {
   const leaf = fileName.replaceAll("\\", "/").split("/").pop() ?? "workbook";
@@ -48,7 +49,10 @@ export async function syncSharePointWorkbook(input: {
 }): Promise<SharePointSyncResult> {
   const context = await withUserContext(
     { userId: input.actorUserId, tenantId: input.tenantId },
-    (client) => getSharePointSyncContext(client, { tenantId: input.tenantId, pipelineId: input.pipelineId }),
+    async (client) => {
+      await assertProductAccess(client, { tenantId: input.tenantId, productKey: "connect" });
+      return getSharePointSyncContext(client, { tenantId: input.tenantId, pipelineId: input.pipelineId });
+    },
   );
   const leaseToken = input.leaseToken ?? await withUserContext(
     { userId: input.actorUserId, tenantId: input.tenantId },

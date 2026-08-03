@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { insertAuditLog } from "@/server/domains/access-control/audit";
+import { assertProductAccess } from "@/server/domains/products/entitlements";
 import { savePipelineBuilderConfiguration } from "@/server/domains/connectors/pipeline-configuration";
 import type { LoadMode, PipelineDataType } from "@/server/domains/connectors/tabular-load";
 
@@ -16,6 +17,10 @@ async function requireConnectOperator() {
   if (ctx.role !== "company_admin" && ctx.role !== "analyst") {
     throw new Error("Only a company admin or analyst can configure Connect.");
   }
+  await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    (client) => assertProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" }),
+  );
   return ctx;
 }
 

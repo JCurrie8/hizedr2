@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createR2Upload, deleteR2Object, downloadR2Object, verifyR2Upload } from "./r2";
+import {
+  createR2BrandingUpload,
+  createR2Upload,
+  deleteR2Object,
+  downloadR2Object,
+  verifyR2BrandingUpload,
+  verifyR2Upload,
+} from "./r2";
 
 const hasR2Environment = ["R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"]
   .every((name) => Boolean(process.env[name]));
@@ -50,6 +57,21 @@ describe.skipIf(!hasR2Environment)("R2 source object storage", () => {
         );
       }
       await verifyR2Upload({ key, sizeBytes: bytes.byteLength, metadata });
+      expect(await downloadR2Object(key)).toEqual(bytes);
+    } finally {
+      await deleteR2Object(key);
+    }
+  });
+
+  it("keeps tenant-branding uploads separate from pipeline metadata", async () => {
+    const bytes = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80]);
+    const key = `integration-tests/${randomUUID()}.webp`;
+    const metadata = { tenantId: randomUUID(), contentSha256: "b".repeat(64) };
+    try {
+      const upload = await createR2BrandingUpload({ key, contentType: "image/webp", metadata });
+      const response = await fetch(upload.uploadUrl, { method: "PUT", headers: upload.headers, body: bytes });
+      expect(response.ok).toBe(true);
+      await verifyR2BrandingUpload({ key, sizeBytes: bytes.byteLength, metadata });
       expect(await downloadR2Object(key)).toEqual(bytes);
     } finally {
       await deleteR2Object(key);

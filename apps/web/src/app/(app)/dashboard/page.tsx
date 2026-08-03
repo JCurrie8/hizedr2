@@ -3,7 +3,9 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { getPulseHomeSnapshot } from "@/server/domains/pulse/home";
+import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
+import { redirect } from "next/navigation";
 
 function formatDateTime(value: string, timezone: string): string {
   return new Intl.DateTimeFormat("en-GB", {
@@ -22,12 +24,16 @@ export default async function DashboardPage() {
     headers(),
     withUserContext(
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
-      (client) => getPulseHomeSnapshot(client, { tenantId: ctx.tenant.id, includeConnectHealth }),
+      async (client) => {
+        if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "pulse" })) return null;
+        return getPulseHomeSnapshot(client, { tenantId: ctx.tenant.id, includeConnectHealth });
+      },
     ),
   ]);
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });
+  if (!snapshot) redirect(tenantHref("/home"));
   const firstName = ctx.fullName?.trim().split(/\s+/)[0] ?? null;
   const connect = snapshot.connect;
   const hasCompletedRun = connect?.recentRuns.some((run) => run.status === "succeeded" || run.status === "warning") ?? false;
@@ -138,26 +144,26 @@ export default async function DashboardPage() {
           </ol>
         </section>
 
-        <aside className="rounded-xl bg-navy p-5 text-white sm:p-6">
-          <p className="font-mono text-xs uppercase tracking-[0.16em] text-teal">Data confidence</p>
+        <aside className="tenant-brand-primary rounded-xl p-5 sm:p-6">
+          <p className="font-mono text-xs uppercase tracking-[0.16em] opacity-75">Data confidence</p>
           <h2 className="mt-2 font-display text-xl font-semibold">Know what sits behind every number</h2>
           {includeConnectHealth ? (
             <dl className="mt-6 space-y-4">
               <div className="flex items-end justify-between gap-4 border-b border-white/15 pb-3">
-                <dt className="text-sm text-white/70">Configured sources</dt>
+                <dt className="text-sm opacity-70">Configured sources</dt>
                 <dd className="font-display text-2xl font-bold">{connect?.connectors.length ?? 0}</dd>
               </div>
               <div className="flex items-end justify-between gap-4 border-b border-white/15 pb-3">
-                <dt className="text-sm text-white/70">Recent rows accepted</dt>
+                <dt className="text-sm opacity-70">Recent rows accepted</dt>
                 <dd className="font-display text-2xl font-bold">{(connect?.recentRowsAccepted ?? 0).toLocaleString("en-GB")}</dd>
               </div>
               <div className="flex items-end justify-between gap-4">
-                <dt className="text-sm text-white/70">Runs needing attention</dt>
+                <dt className="text-sm opacity-70">Runs needing attention</dt>
                 <dd className="font-display text-2xl font-bold">{attentionCount}</dd>
               </div>
             </dl>
           ) : (
-            <p className="mt-5 text-sm leading-6 text-white/75">
+            <p className="mt-5 text-sm leading-6 opacity-75">
               Freshness, definitions and lineage will travel with every KPI. Your role only receives approved performance views—not connector credentials or raw pipeline controls.
             </p>
           )}

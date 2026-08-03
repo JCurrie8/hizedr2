@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.1 |
+| Document status | Build-ready product definition — Version 2.2 |
 
 ### Changes since v1.0
 
@@ -79,6 +79,12 @@ This specification is designed to be handed to an AI software builder, technical
 - **Division is an explicit hierarchy node.** Organisation structures can model divisions directly rather than overloading function or department. The existing `employee` application role is presented to customers as **End user**; this is a product label, not a separate permission role.
 - **Tenant branding is Company Admin configuration.** A company can apply its logo, accessible brand colours and an approved typography choice across its tenant shell, Pulse and Canvas. Branding is tenant-scoped, previewable and resettable; it cannot inject arbitrary CSS/scripts, obscure security/status colours or alter another tenant or the Hized Platform Administration surface.
 
+### Changes since v2.1
+
+- **The authenticated tenant entry is a product hub.** After organisation selection, users land on Home rather than being dropped into Pulse. Home shows Pulse, Connect and Canvas, their company-level availability and any separate role limitation, with direct entry to available areas.
+- **Commercial entitlements are server-enforced.** Hized Platform Administration controls whether each tenant product is active, on trial or locked. Company Admins configure an enabled product but cannot self-enable a product the company has not purchased. Locked products remain discoverable with a lock and a marketing “Find out more” route; typed URLs, server actions, OAuth callbacks and background jobs must enforce the same entitlement.
+- **Tenant Settings is a platform capability, not an upsell module.** Organisation structure, users/access, branding and audit live behind one Settings landing. Role checks still govern each setting, independently from product subscription access.
+
 ## 1. Product definition and positioning
 
 ### 1.1 Product vision
@@ -137,6 +143,20 @@ Hized Advisory wraps the technology in discovery, data design, KPI definition, i
 | Managed platform | All users | Hosting, refreshes, monitoring, support, updates and backups | Monthly recurring fee |
 | Performance advisory | Executive and operational leaders | Monthly review, new insights, metric refinement and improvement actions | Monthly retainer |
 | Custom ETL and development | Selected clients | Unusual source extraction, multi-source reconciliation, bespoke business rules, new connectors, modules or workflows | Scoped professional services plus an optional managed-support uplift |
+
+### 2.6 Product entry and entitlements
+
+The tenant Home page is the stable post-login entry point. It presents the product suite without conflating three different decisions: whether the company subscribes to a product, whether the member's feature role can operate it, and which organisation-scoped data that member may see.
+
+| ID | Requirement | Priority | Acceptance signal |
+|---|---|---|---|
+| SUITE-001 | Land an authenticated tenant member on a responsive Home product hub after organisation resolution. | Must | A single-tenant login and tenant-root visit open Home; the user can enter each available product or Settings without guessing routes. |
+| SUITE-002 | Store one explicit `active`, `trial` or `locked` entitlement per tenant product. | Must | Entitlements are tenant-isolated by RLS; Hized Platform Admin can change them in the selected tenant context and Company Admin cannot grant paid access. |
+| SUITE-003 | Enforce locked products on every execution path, not only in navigation. | Must | A locked product cannot be used through a typed URL, server action, OAuth callback, API or scheduled job. |
+| SUITE-004 | Keep locked products discoverable with a clear commercial next step. | Should | Home displays a lock, “Not included” and a “Find out more” link without presenting a role restriction as a billing problem. |
+| SUITE-005 | Consolidate tenant configuration behind Settings. | Must | Organisation, users/access, branding and audit are reachable from one landing, and each destination retains its role gate. |
+
+Settings is not a separately billable product. Pulse and Canvas remain company-wide once entitled; their data and actions are still constrained by role, organisation scope and metric/subject permissions. Connect may be commercially active for a tenant while its configuration surface remains restricted to Company Admins and Analysts.
 
 ## 3. Users, organisational hierarchy and permissions
 

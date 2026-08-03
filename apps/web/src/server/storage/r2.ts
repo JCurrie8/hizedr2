@@ -45,6 +45,11 @@ export interface UploadMetadata {
   contentSha256: string;
 }
 
+export interface BrandingUploadMetadata {
+  tenantId: string;
+  contentSha256: string;
+}
+
 export async function createR2Upload(input: {
   key: string;
   contentType: string;
@@ -86,6 +91,43 @@ export async function createR2Upload(input: {
   };
 }
 
+export async function createR2BrandingUpload(input: {
+  key: string;
+  contentType: "image/png" | "image/webp";
+  metadata: BrandingUploadMetadata;
+}): Promise<{ uploadUrl: string; headers: Record<string, string>; expiresAt: string }> {
+  const metadata = {
+    "tenant-id": input.metadata.tenantId,
+    purpose: "tenant-branding",
+    sha256: input.metadata.contentSha256,
+  };
+  const command = new PutObjectCommand({
+    Bucket: getBucket(),
+    Key: input.key,
+    ContentType: input.contentType,
+    Metadata: metadata,
+  });
+  const expiresIn = 10 * 60;
+  const uploadUrl = await getSignedUrl(getClient(), command, {
+    expiresIn,
+    unhoistableHeaders: new Set([
+      "x-amz-meta-tenant-id",
+      "x-amz-meta-purpose",
+      "x-amz-meta-sha256",
+    ]),
+  });
+  return {
+    uploadUrl,
+    expiresAt: new Date(Date.now() + expiresIn * 1_000).toISOString(),
+    headers: {
+      "content-type": input.contentType,
+      "x-amz-meta-tenant-id": metadata["tenant-id"],
+      "x-amz-meta-purpose": metadata.purpose,
+      "x-amz-meta-sha256": metadata.sha256,
+    },
+  };
+}
+
 export async function uploadR2Object(input: {
   key: string;
   bytes: Uint8Array;
@@ -119,6 +161,22 @@ export async function verifyR2Upload(input: {
     result.Metadata?.sha256 !== input.metadata.contentSha256
   ) {
     throw new Error("The uploaded object metadata is invalid.");
+  }
+}
+
+export async function verifyR2BrandingUpload(input: {
+  key: string;
+  sizeBytes: number;
+  metadata: BrandingUploadMetadata;
+}): Promise<void> {
+  const result = await getClient().send(new HeadObjectCommand({ Bucket: getBucket(), Key: input.key }));
+  if (result.ContentLength !== input.sizeBytes) throw new Error("The uploaded logo size does not match the request.");
+  if (
+    result.Metadata?.["tenant-id"] !== input.metadata.tenantId ||
+    result.Metadata?.purpose !== "tenant-branding" ||
+    result.Metadata?.sha256 !== input.metadata.contentSha256
+  ) {
+    throw new Error("The uploaded logo metadata is invalid.");
   }
 }
 

@@ -47,7 +47,7 @@ export async function getTenantLandingContext(requestHeaders: Headers): Promise<
 }
 
 export function tenantEntryUrl(opts: { slug: string; host: string; protocol?: string }): string {
-  return tenantAppUrl({ ...opts, path: "/dashboard" });
+  return tenantAppUrl({ ...opts, path: "/home" });
 }
 
 export function tenantAppUrl(opts: { slug: string; host: string; protocol?: string; path: string }): string {

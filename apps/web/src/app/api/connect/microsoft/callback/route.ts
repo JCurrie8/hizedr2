@@ -10,6 +10,7 @@ import {
   openMicrosoftOAuthState,
 } from "@/server/domains/connectors/microsoft-oauth";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
+import { assertProductAccess } from "@/server/domains/products/entitlements";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -37,6 +38,7 @@ export async function GET(request: Request) {
     const created = await withUserContext(
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
+        await assertProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" });
         const connector = await createMicrosoftConnector(client, {
           tenantId: ctx.tenant.id,
           createdBy: ctx.profileId,
