@@ -18,6 +18,26 @@ function tenant(number, details) {
     node.path = parent ? `${parent.path}.${pathLabel(node.id)}` : pathLabel(node.id);
   }
 
+  const datasets = (details.datasets ?? []).map((dataset, index) => ({
+    ...dataset,
+    id: stableId(number, 400 + index),
+  }));
+  const datasetsByKey = new Map(datasets.map((dataset) => [dataset.key, dataset]));
+  const kpis = (details.kpis ?? []).map((kpi, index) => {
+    const dataset = datasetsByKey.get(kpi.datasetKey);
+    if (!dataset) throw new Error(`Unknown dataset ${kpi.datasetKey}`);
+    return {
+      ...kpi,
+      id: stableId(number, 500 + index),
+      datasetId: dataset.id,
+      values: kpi.values.map((value, valueIndex) => {
+        const orgNode = byKey.get(value.orgKey);
+        if (!orgNode) throw new Error(`Unknown KPI organisation node ${value.orgKey}`);
+        return { ...value, id: stableId(number, 600 + index * 20 + valueIndex), orgNodeId: orgNode.id };
+      }),
+    };
+  });
+
   return {
     id: stableId(number, 1),
     slug: details.slug,
@@ -31,10 +51,12 @@ function tenant(number, details) {
       name: `${details.name} seed administrator`,
     },
     nodes,
+    datasets,
+    kpis,
   };
 }
 
-export const DEMO_SEED_VERSION = "phase0-v1";
+export const DEMO_SEED_VERSION = "pulse-v1";
 export const DEMO_VALID_FROM = "2026-01-01";
 
 export const demoTenants = [
@@ -55,6 +77,65 @@ export const demoTenants = [
       { key: "service-desk", type: "team", name: "Service Desk", parentKey: "customer-service" },
       { key: "finance", type: "function", name: "Finance", parentKey: "company" },
     ],
+    datasets: [
+      {
+        key: "installation_performance",
+        name: "Installation performance",
+        subjectArea: "Operations",
+        refreshCadence: "Daily by 07:00",
+        expectedLatency: "1 day",
+        sourceAge: "2 hours",
+      },
+      {
+        key: "customer_service_performance",
+        name: "Customer service performance",
+        subjectArea: "Customer Care",
+        refreshCadence: "Every 4 hours",
+        expectedLatency: "6 hours",
+        sourceAge: "3 days",
+      },
+    ],
+    kpis: [
+      {
+        key: "first_time_completion",
+        datasetKey: "installation_performance",
+        name: "First-time completion",
+        definition: "Percentage of completed installation jobs that did not require a repeat visit within the quality window.",
+        businessPurpose: "Protect customer experience and reduce avoidable repeat visits.",
+        formulaReference: "eligible_first_time_jobs / eligible_completed_jobs",
+        ownerName: "Head of Field Operations",
+        unit: "percentage",
+        decimalPlaces: 1,
+        favourableDirection: "higher",
+        aggregation: "ratio",
+        thresholds: { green: { gte: 92 }, amber: { gte: 88 } },
+        values: [
+          { orgKey: "company", actual: 90.6, target: 92, prior: 89.4, numerator: 453, denominator: 500 },
+          { orgKey: "north", actual: 89.8, target: 92, prior: 88.7, numerator: 269.4, denominator: 300 },
+          { orgKey: "install-north", actual: 91.2, target: 92, prior: 90.1, numerator: 182.4, denominator: 200 },
+          { orgKey: "aisha", actual: 94.0, target: 92, prior: 91.0, numerator: 47, denominator: 50 },
+        ],
+      },
+      {
+        key: "open_service_backlog",
+        datasetKey: "customer_service_performance",
+        name: "Open service backlog",
+        definition: "Number of customer service requests still open at the reporting cut-off.",
+        businessPurpose: "Expose ageing demand before service levels and customer outcomes deteriorate.",
+        formulaReference: "count(open_service_requests)",
+        ownerName: "Customer Service Director",
+        unit: "number",
+        decimalPlaces: 0,
+        favourableDirection: "lower",
+        aggregation: "snapshot",
+        thresholds: { green: { lte: 85 }, amber: { lte: 100 } },
+        values: [
+          { orgKey: "company", actual: 112, target: 85, prior: 97 },
+          { orgKey: "customer-service", actual: 112, target: 85, prior: 97 },
+          { orgKey: "service-desk", actual: 112, target: 85, prior: 97 },
+        ],
+      },
+    ],
   }),
   tenant(2, {
     slug: "harbour-field-services",
@@ -66,6 +147,37 @@ export const demoTenants = [
       { key: "repairs", type: "team", name: "Repairs Team", parentKey: "bristol" },
       { key: "maya", type: "employee", name: "Maya Patel", parentKey: "repairs" },
       { key: "finance", type: "function", name: "Finance", parentKey: "company" },
+    ],
+    datasets: [
+      {
+        key: "repair_performance",
+        name: "Repair performance",
+        subjectArea: "Operations",
+        refreshCadence: "Daily by 08:00",
+        expectedLatency: "1 day",
+        sourceAge: "3 hours",
+      },
+    ],
+    kpis: [
+      {
+        key: "repairs_completed_on_time",
+        datasetKey: "repair_performance",
+        name: "Repairs completed on time",
+        definition: "Percentage of completed repair jobs finished within the agreed service window.",
+        businessPurpose: "Track reliable delivery against customer commitments.",
+        formulaReference: "on_time_repairs / completed_repairs",
+        ownerName: "Operations Director",
+        unit: "percentage",
+        decimalPlaces: 1,
+        favourableDirection: "higher",
+        aggregation: "ratio",
+        thresholds: { green: { gte: 95 }, amber: { gte: 90 } },
+        values: [
+          { orgKey: "company", actual: 96.4, target: 95, prior: 94.8, numerator: 241, denominator: 250 },
+          { orgKey: "repairs", actual: 96.4, target: 95, prior: 94.8, numerator: 241, denominator: 250 },
+          { orgKey: "maya", actual: 98.0, target: 95, prior: 96.0, numerator: 49, denominator: 50 },
+        ],
+      },
     ],
   }),
 ];
@@ -85,6 +197,8 @@ export function validateDemoData() {
       demoTenant.seedPrincipal.profileId,
       demoTenant.seedPrincipal.membershipId,
       ...demoTenant.nodes.flatMap((node) => [node.id, node.versionId]),
+      ...demoTenant.datasets.map((dataset) => dataset.id),
+      ...demoTenant.kpis.flatMap((kpi) => [kpi.id, ...kpi.values.map((value) => value.id)]),
     ];
     for (const id of tenantIds) {
       if (ids.has(id)) throw new Error(`Duplicate stable ID ${id}`);

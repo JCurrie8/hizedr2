@@ -215,15 +215,20 @@ describe("RLS tenant isolation", () => {
        order by p.proname`,
       [[
         "accept_invitation_by_token",
+        "can_read_governed_dataset",
+        "can_read_kpi_definition",
+        "can_read_kpi_definition_row",
+        "can_read_kpi_value",
         "current_user_has_tenant_access",
         "current_user_tenant_ids",
         "get_membership_for_slug",
         "get_profile_for_auth_user",
         "has_pending_invitation_by_token",
         "is_connect_operator",
+        "is_kpi_governor",
       ]],
     );
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(12);
     expect(rows.every((row) => row.public_execute === false)).toBe(true);
   });
 
@@ -525,6 +530,134 @@ describe("RLS tenant isolation", () => {
       ).then((result) => result.rowCount),
     );
     expect(ownTenantUpdate).toBe(0);
+  });
+
+  it("governed KPI metadata stays pinned to the explicitly selected tenant", async () => {
+    const { rows: [datasetA] } = await admin.query(
+      `insert into public.governed_datasets
+         (tenant_id, dataset_key, name, subject_area, status, refresh_cadence,
+          expected_latency, created_by, updated_by)
+       values ($1, 'rls_dataset_a', 'RLS dataset A', 'Test', 'published', 'Daily',
+               interval '1 day', $2, $2) returning id`,
+      [tenantA.tenantId, tenantA.profileId],
+    );
+    const { rows: [datasetB] } = await admin.query(
+      `insert into public.governed_datasets
+         (tenant_id, dataset_key, name, subject_area, status, refresh_cadence,
+          expected_latency, created_by, updated_by)
+       values ($1, 'rls_dataset_b', 'RLS dataset B', 'Test', 'published', 'Daily',
+               interval '1 day', $2, $2) returning id`,
+      [tenantB.tenantId, tenantB.profileId],
+    );
+    await admin.query(
+      "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'company_admin', 'active')",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    try {
+      const scopedToA = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query("select tenant_id from public.governed_datasets where id in ($1, $2)", [datasetA.id, datasetB.id])
+          .then((result) => result.rows),
+      );
+      expect(scopedToA).toEqual([{ tenant_id: tenantA.tenantId }]);
+
+      const crossTenantUpdate = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query(
+          "update public.governed_datasets set name = 'cross-tenant change', updated_by = $1 where id = $2",
+          [tenantA.profileId, datasetB.id],
+        ).then((result) => result.rowCount),
+      );
+      expect(crossTenantUpdate).toBe(0);
+    } finally {
+      await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [
+        tenantB.tenantId,
+        tenantA.profileId,
+      ]);
+    }
+  });
+
+  it("lets an Analyst draft a KPI but requires Company Admin approval", async () => {
+    const { rows: [dataset] } = await admin.query(
+      `insert into public.governed_datasets
+         (tenant_id, dataset_key, name, subject_area, status, refresh_cadence,
+          expected_latency, created_by, updated_by)
+       values ($1, 'approval_dataset', 'Approval dataset', 'Test', 'published',
+               'Daily', interval '1 day', $2, $2) returning id`,
+      [tenantEmployee.tenantId, tenantEmployee.profileId],
+    );
+    const analystRoleUpdate = await admin.query(
+      "update public.tenant_memberships set role = 'analyst' where tenant_id = $1 and user_id = $2",
+      [tenantEmployee.tenantId, tenantEmployee.profileId],
+    );
+    expect(analystRoleUpdate.rowCount).toBe(1);
+
+    try {
+      const governorState = await withUserContext(
+        { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+        (client) => client.query(
+          "select public.is_kpi_governor($1) as governor, public.current_user_has_tenant_access($1) as member",
+          [tenantEmployee.tenantId],
+        ).then((result) => result.rows[0]),
+      );
+      expect(governorState).toEqual({ governor: true, member: true });
+      let definitionId: string;
+      try {
+        definitionId = await withUserContext(
+          { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+          (client) => client.query(
+            `insert into public.kpi_definitions
+               (tenant_id, dataset_id, kpi_key, version_number, name, definition,
+                formula_reference, owner_name, unit, favourable_direction, aggregation,
+                refresh_cadence, valid_from, created_by)
+             values ($1, $2, 'approval_test', 1, 'Approval test', 'A governed test KPI.',
+                     'count(test_rows)', 'Test owner', 'number', 'higher', 'sum',
+                     'Daily', current_date, $3)
+             returning id`,
+            [tenantEmployee.tenantId, dataset.id, tenantEmployee.profileId],
+          ).then((result) => result.rows[0].id),
+        );
+      } catch (error) {
+        throw new Error("Analyst draft insert failed", { cause: error });
+      }
+
+      await expect(
+        withUserContext(
+          { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+          (client) => client.query(
+            `update public.kpi_definitions
+             set approval_status = 'approved', approved_by = $1, approved_at = now()
+             where id = $2`,
+            [tenantEmployee.profileId, definitionId],
+          ),
+        ),
+      ).rejects.toThrow(/row-level security policy/);
+
+      await admin.query(
+        "update public.tenant_memberships set role = 'company_admin' where tenant_id = $1 and user_id = $2",
+        [tenantEmployee.tenantId, tenantEmployee.profileId],
+      );
+      let approved: string | undefined;
+      try {
+        approved = await withUserContext(
+          { userId: tenantEmployee.profileId, tenantId: tenantEmployee.tenantId },
+          (client) => client.query(
+            `update public.kpi_definitions
+             set approval_status = 'approved', approved_by = $1, approved_at = now()
+             where id = $2 returning approval_status`,
+            [tenantEmployee.profileId, definitionId],
+          ).then((result) => result.rows[0]?.approval_status),
+        );
+      } catch (error) {
+        throw new Error("Company Admin approval failed", { cause: error });
+      }
+      expect(approved).toBe("approved");
+    } finally {
+      await admin.query(
+        "update public.tenant_memberships set role = 'employee' where tenant_id = $1 and user_id = $2",
+        [tenantEmployee.tenantId, tenantEmployee.profileId],
+      );
+    }
   });
 
   it("deduplicates an unchanged source item by connector, item id, and content hash", async () => {
