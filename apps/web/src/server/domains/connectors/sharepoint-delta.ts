@@ -4,6 +4,7 @@ const SUPPORTED_EXTENSIONS = new Set(["csv", "xlsx"]);
 export interface GraphDriveItem {
   id: string;
   name?: string;
+  webUrl?: string;
   eTag?: string;
   cTag?: string;
   size?: number;
@@ -11,6 +12,7 @@ export interface GraphDriveItem {
   file?: { mimeType?: string };
   folder?: Record<string, unknown>;
   deleted?: Record<string, unknown>;
+  parentReference?: { path?: string; driveId?: string };
 }
 
 export interface GraphDriveDeltaPage {
@@ -24,6 +26,7 @@ export type SharePointDeltaChange =
       kind: "download";
       driveItemId: string;
       sourceName: string;
+      sourcePath: string | null;
       sourceETag: string | null;
       sourceCTag: string | null;
       sourceModifiedAt: string | null;
@@ -88,6 +91,7 @@ export function planSharePointDeltaPage(input: {
       kind: "download",
       driveItemId: item.id,
       sourceName: item.name,
+      sourcePath: item.webUrl ?? item.parentReference?.path ?? null,
       sourceETag: item.eTag ?? null,
       sourceCTag: item.cTag ?? null,
       sourceModifiedAt: optionalIsoTimestamp(item.lastModifiedDateTime),

@@ -25,6 +25,7 @@ describe("SharePoint drive delta reconciliation", () => {
         kind: "download",
         driveItemId: "form",
         sourceName: "responses.xlsx",
+        sourcePath: null,
         sourceETag: "new",
         sourceCTag: null,
         sourceModifiedAt: "2026-08-02T12:00:00.000Z",

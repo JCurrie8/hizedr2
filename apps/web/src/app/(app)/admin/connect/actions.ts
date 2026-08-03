@@ -2,6 +2,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { insertAuditLog } from "@/server/domains/access-control/audit";
@@ -12,6 +13,19 @@ import {
   persistManualFileRun,
 } from "@/server/domains/connectors/connectors";
 import { parseTabularFile } from "@/server/domains/connectors/tabular-file";
+import { resolveMicrosoftWorkbook } from "@/server/domains/connectors/microsoft-graph";
+import {
+  createMicrosoftAuthorizationUrl,
+  createMicrosoftOAuthState,
+  ensureFreshMicrosoftCredentials,
+  microsoftConnectorEnvironmentReady,
+} from "@/server/domains/connectors/microsoft-oauth";
+import {
+  configureMicrosoftWorkbookPipeline,
+  getMicrosoftConnectorCredentials,
+  replaceMicrosoftConnectorCredentials,
+} from "@/server/domains/connectors/sharepoint-connectors";
+import { syncSharePointWorkbook } from "@/server/domains/connectors/sharepoint-sync";
 import {
   createR2Upload,
   deleteR2Object,
@@ -89,6 +103,115 @@ export async function createManualFilePipelineAction(formData: FormData) {
     });
   });
 
+  revalidatePath("/admin/connect");
+}
+
+function parsePipelineConfig(formData: FormData) {
+  const pipelineName = String(formData.get("pipelineName") ?? "").trim();
+  if (pipelineName.length < 2 || pipelineName.length > 100) {
+    throw new Error("Pipeline name must be between 2 and 100 characters.");
+  }
+  const rawLoadMode = String(formData.get("loadMode") ?? "snapshot");
+  if (!("snapshot" === rawLoadMode || "append" === rawLoadMode || "upsert" === rawLoadMode)) {
+    throw new Error("Invalid load mode.");
+  }
+  const loadMode = rawLoadMode as "snapshot" | "append" | "upsert";
+  const keyColumns = String(formData.get("keyColumns") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (loadMode === "upsert" && keyColumns.length === 0) {
+    throw new Error("Upsert pipelines require at least one key column, such as Response ID.");
+  }
+  return { pipelineName, loadMode, keyColumns };
+}
+
+export async function beginMicrosoftConnectionAction(formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (!microsoftConnectorEnvironmentReady()) {
+    throw new Error("Microsoft Connect is not configured in this deployment yet.");
+  }
+  const connectorName = String(formData.get("name") ?? "").trim();
+  if (connectorName.length < 2 || connectorName.length > 100) {
+    throw new Error("Connection name must be between 2 and 100 characters.");
+  }
+  const state = createMicrosoftOAuthState({
+    tenantId: ctx.tenant.id,
+    tenantSlug: ctx.tenant.slug,
+    profileId: ctx.profileId,
+    connectorName,
+  });
+  redirect(createMicrosoftAuthorizationUrl(state));
+}
+
+export async function configureMicrosoftWorkbookAction(formData: FormData) {
+  const ctx = await requireConnectOperator();
+  const connectorId = String(formData.get("connectorId") ?? "");
+  if (!UUID_PATTERN.test(connectorId)) throw new Error("Invalid Microsoft connector.");
+  const sourceKind = String(formData.get("sourceKind") ?? "sharepoint");
+  if (sourceKind !== "sharepoint" && sourceKind !== "onedrive") throw new Error("Invalid Microsoft source type.");
+  const workbookPath = String(formData.get("workbookPath") ?? "").trim();
+  if (workbookPath.length < 3 || workbookPath.length > 1_000) throw new Error("Enter the workbook path.");
+  const siteUrl = String(formData.get("siteUrl") ?? "").trim();
+  const pipelineConfig = parsePipelineConfig(formData);
+
+  const credentials = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    (client) => getMicrosoftConnectorCredentials(client, { tenantId: ctx.tenant.id, connectorId }),
+  );
+  const fresh = await ensureFreshMicrosoftCredentials(credentials);
+  if (fresh.refreshed) {
+    await withUserContext(
+      { userId: ctx.profileId, tenantId: ctx.tenant.id },
+      (client) => replaceMicrosoftConnectorCredentials(client, {
+        tenantId: ctx.tenant.id,
+        connectorId,
+        credentials: fresh.credentials,
+      }),
+    );
+  }
+  const source = await resolveMicrosoftWorkbook({
+    accessToken: fresh.credentials.accessToken,
+    sourceKind,
+    workbookPath,
+    siteUrl: siteUrl || undefined,
+  });
+  await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => {
+      const created = await configureMicrosoftWorkbookPipeline(client, {
+        tenantId: ctx.tenant.id,
+        connectorId,
+        createdBy: ctx.profileId,
+        ...pipelineConfig,
+        source,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "connect.sharepoint_pipeline_configured",
+        targetType: "pipeline",
+        targetId: created.pipelineId,
+        metadata: {
+          connectorId,
+          sourceKind,
+          driveId: source.driveId,
+          driveItemId: source.driveItemId,
+          sourceName: source.sourceName,
+          loadMode: pipelineConfig.loadMode,
+          keyColumns: pipelineConfig.keyColumns,
+        },
+      });
+    },
+  );
+  revalidatePath("/admin/connect");
+}
+
+export async function syncMicrosoftWorkbookAction(formData: FormData) {
+  const ctx = await requireConnectOperator();
+  const pipelineId = String(formData.get("pipelineId") ?? "");
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid SharePoint pipeline.");
+  await syncSharePointWorkbook({ tenantId: ctx.tenant.id, actorUserId: ctx.profileId, pipelineId });
   revalidatePath("/admin/connect");
 }
 
@@ -236,12 +359,12 @@ export async function finaliseManualUploadAction(input: {
         return failed;
       },
     );
-    if (failure.sourceObjectReused) await deleteR2Object(input.storageKey);
+    if (failure.sourceObjectReused) await deleteR2Object(input.storageKey).catch(() => {});
     revalidatePath("/admin/connect");
     throw new Error(errorMessage);
   }
 
-  if (result.sourceObjectReused) await deleteR2Object(input.storageKey);
+  if (result.sourceObjectReused) await deleteR2Object(input.storageKey).catch(() => {});
   revalidatePath("/admin/connect");
   return result;
 }

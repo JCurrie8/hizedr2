@@ -185,7 +185,7 @@ export async function listRecentPipelineRuns(
   }));
 }
 
-interface ManualFileSourceInput {
+export interface TabularFileSourceInput {
   tenantId: string;
   pipeline: ManualFilePipeline;
   fileName: string;
@@ -194,23 +194,33 @@ interface ManualFileSourceInput {
   sizeBytes: number;
   storageKey: string;
   sourceModifiedAt: string | null;
+  sourceItemId?: string;
+  sourcePath?: string | null;
+  sourceETag?: string | null;
+  sourceCTag?: string | null;
+  triggerType?: "manual_upload" | "manual_sync" | "schedule" | "webhook" | "retry" | "backfill";
+  sourceMetadata?: Record<string, unknown>;
 }
 
 async function resolveManualFileBatch(
   client: PoolClient,
-  input: ManualFileSourceInput & { metadata: Record<string, unknown> },
+  input: TabularFileSourceInput & { metadata: Record<string, unknown> },
 ): Promise<{ id: string; reused: boolean }> {
   const { rows: insertedBatches } = await client.query(
     `insert into public.source_batches
-       (tenant_id, connector_id, batch_kind, source_item_id, source_name,
-        source_modified_at, content_sha256, content_type, size_bytes, storage_key, metadata)
-     values ($1, $2, 'file_revision', $3, $3, $4, $5, $6, $7, $8, $9::jsonb)
+       (tenant_id, connector_id, batch_kind, source_item_id, source_path, source_name,
+        source_etag, source_ctag, source_modified_at, content_sha256, content_type, size_bytes, storage_key, metadata)
+     values ($1, $2, 'file_revision', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
      on conflict (connector_id, source_item_id, content_sha256) do nothing
      returning id`,
     [
       input.tenantId,
       input.pipeline.connectorId,
+      input.sourceItemId ?? input.fileName,
+      input.sourcePath ?? null,
       input.fileName,
+      input.sourceETag ?? null,
+      input.sourceCTag ?? null,
       input.sourceModifiedAt,
       input.contentSha256,
       input.contentType,
@@ -224,7 +234,7 @@ async function resolveManualFileBatch(
   const { rows: [existingBatch] } = await client.query(
     `select id from public.source_batches
      where connector_id = $1 and source_item_id = $2 and content_sha256 = $3`,
-    [input.pipeline.connectorId, input.fileName, input.contentSha256],
+    [input.pipeline.connectorId, input.sourceItemId ?? input.fileName, input.contentSha256],
   );
   if (!existingBatch) throw new Error("The source batch could not be resolved after deduplication.");
   return { id: existingBatch.id, reused: true };
@@ -248,14 +258,14 @@ async function findCompletedRun(client: PoolClient, pipelineId: string, sourceBa
 
 export async function persistManualFileRun(
   client: PoolClient,
-  input: ManualFileSourceInput & {
+  input: TabularFileSourceInput & {
     actorUserId: string;
     table: ParsedTable;
   },
 ): Promise<{ runId: string; status: "succeeded" | "warning"; duplicate: boolean; sourceObjectReused: boolean; acceptedRows: number; rejectedRows: number }> {
   const sourceBatch = await resolveManualFileBatch(client, {
     ...input,
-    metadata: { sheetName: input.table.sheetName, headers: input.table.headers },
+    metadata: { ...input.sourceMetadata, sheetName: input.table.sheetName, headers: input.table.headers },
   });
   await lockPipelineBatch(client, input.pipeline.id, sourceBatch.id);
   const existingRun = await findCompletedRun(client, input.pipeline.id, sourceBatch.id);
@@ -281,13 +291,14 @@ export async function persistManualFileRun(
     `insert into public.pipeline_runs
        (tenant_id, pipeline_id, connector_id, source_batch_id, trigger_type,
         status, initiated_by, started_at, source_watermark)
-     values ($1, $2, $3, $4, 'manual_upload', 'running', $5, now(), $6)
+     values ($1, $2, $3, $4, $5, 'running', $6, now(), $7)
      returning id`,
     [
       input.tenantId,
       input.pipeline.id,
       input.pipeline.connectorId,
       sourceBatch.id,
+      input.triggerType ?? "manual_upload",
       input.actorUserId,
       input.contentSha256,
     ],
@@ -401,11 +412,11 @@ export async function persistManualFileRun(
 
 export async function persistManualFileFailure(
   client: PoolClient,
-  input: ManualFileSourceInput & { actorUserId: string; errorMessage: string },
+  input: TabularFileSourceInput & { actorUserId: string; errorMessage: string },
 ): Promise<{ runId: string; duplicate: boolean; sourceObjectReused: boolean }> {
   const sourceBatch = await resolveManualFileBatch(client, {
     ...input,
-    metadata: { processingError: input.errorMessage },
+    metadata: { ...input.sourceMetadata, processingError: input.errorMessage },
   });
   await lockPipelineBatch(client, input.pipeline.id, sourceBatch.id);
   const existingRun = await findCompletedRun(client, input.pipeline.id, sourceBatch.id);
@@ -416,14 +427,15 @@ export async function persistManualFileFailure(
     `insert into public.pipeline_runs
        (tenant_id, pipeline_id, connector_id, source_batch_id, trigger_type,
         status, initiated_by, started_at, finished_at, error_code, error_message, source_watermark)
-     values ($1, $2, $3, $4, 'manual_upload', 'failed', $5, now(), now(),
-             'file_processing_failed', $6, $7)
+     values ($1, $2, $3, $4, $5, 'failed', $6, now(), now(),
+             'file_processing_failed', $7, $8)
      returning id`,
     [
       input.tenantId,
       input.pipeline.id,
       input.pipeline.connectorId,
       sourceBatch.id,
+      input.triggerType ?? "manual_upload",
       input.actorUserId,
       input.errorMessage.slice(0, 500),
       input.contentSha256,

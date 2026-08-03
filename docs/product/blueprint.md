@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 1.8 |
+| Document status | Build-ready product definition — Version 1.9 |
 
 ### Changes since v1.0
 
@@ -61,6 +61,10 @@ This specification is designed to be handed to an AI software builder, technical
 ### Changes since v1.7
 
 - **The SME multi-source and Custom ETL boundary is explicit.** A tenant can operate several ordinary connectors and pipelines at once because small and mid-sized companies normally spread operational truth across finance, CRM, service, workforce and recurring spreadsheets. Hized Connect does not need a universal self-serve join canvas for MVP: reusable governed transformations reconcile those feeds. Sources or business rules outside the standard adapters are delivered as paid, Hized-managed Custom ETL work, but must still use the same tenant isolation, secrets, lineage, validation and run-monitoring contracts as packaged connectors.
+
+### Changes since v1.8
+
+- **Microsoft connector authentication and observation semantics clarified.** SharePoint/OneDrive uses multi-tenant delegated Microsoft OAuth with offline access, encrypted refresh-token storage and a stable callback; Graph access remains limited to the connected account and selected Hized sources. Delta reports current drive state rather than guaranteeing recoverable content for every edit between polls, so revision history records every content revision Hized actually observes. A cumulative Forms workbook still captures intervening responses on the next upsert even when several edits occurred between observations.
 
 ## 1. Product definition and positioning
 
@@ -239,7 +243,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-003 | Support CSV and Excel file ingestion from upload or managed folder. | Must | Files can be mapped, validated and loaded with a repeatable schema. |
 | CONN-004 | Provide a generic REST API connector with pagination, authentication and rate-limit handling. | Should | An administrator can configure a common JSON API without custom code. |
 | CONN-005 | Provide a connector SDK or adapter interface. | Should | New sources can be added without modifying the core orchestration engine. |
-| CONN-006 | Monitor selected Excel files or folders in SharePoint Online / OneDrive for Business, including Microsoft Forms response workbooks. | Must | Multiple workbook updates per day create distinct, traceable source revisions and pipeline runs without duplicate ingestion from retries or repeated notifications. |
+| CONN-006 | Monitor selected Excel files or folders in SharePoint Online / OneDrive for Business, including Microsoft Forms response workbooks. | Must | Every changed content revision observed by Hized creates a distinct, traceable source revision and pipeline run without duplicate ingestion from retries or repeated notifications; cumulative Forms responses are not lost when several edits occur between polls. |
 | CONN-007 | Provide first-class Salesforce and Zendesk adapters on a reusable CRM connector contract; allow HubSpot and Dynamics 365 adapters without changing orchestration. | Must | An administrator can discover supported objects/resources, select fields, test access and run an incremental extract through the same pipeline monitoring surface. |
 | CONN-008 | Persist source-specific incremental checkpoints with an optional overlap window and idempotent upsert key. | Must | A delayed, failed or retried CRM run neither misses records nor duplicates previously loaded records; checkpoints advance only after a successful complete run. |
 | CONN-009 | Support several connectors and pipelines per tenant without implying that every feed must be combined. | Must | A company can ingest finance, CRM, service and spreadsheet feeds independently, then select only the sources needed by each governed dataset/KPI. |
@@ -253,6 +257,8 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 - Configurable schedules with tenant time zone support.
 - Idempotent loads and safe retry behaviour.
 - SharePoint/OneDrive change tracking uses stable drive/item identifiers and a persisted delta cursor; change notifications may trigger faster reconciliation but never replace the delta scan. Downloaded content is hashed so repeated Graph notifications, retries and metadata-only changes cannot duplicate a load.
+- Microsoft authorization uses the OAuth authorization-code flow with PKCE and offline access. Refresh tokens are authenticated-encrypted in application code before Postgres, bound to their tenant and connector, never returned to the browser, and re-encrypted when Microsoft rotates them. OAuth client secrets and encryption keys live only in the deployment secret store.
+- SharePoint/OneDrive polling must be configurable frequently enough for the source's operating rhythm (for example every 15–60 minutes for an actively updated Forms workbook). Graph delta exposes the latest observed drive state; Hized must not claim it captured an intermediate workbook content revision that was never downloaded.
 - Cumulative Forms workbooks support a configured stable response key and upsert semantics, so re-reading the latest workbook adds or updates responses rather than appending the full sheet again.
 - Raw landing, staging and curated transformation layers.
 - Data type mapping, column renaming, filtering, joins, calculated fields and deduplication.
