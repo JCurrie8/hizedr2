@@ -52,6 +52,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });
   const canOperateConnect = ctx.role === "company_admin" || ctx.role === "analyst";
   const hasPulse = entitlementStatus(entitlements, "pulse") !== "locked";
+  const hasCanvas = entitlementStatus(entitlements, "canvas") !== "locked";
   const hasConnect = entitlementStatus(entitlements, "connect") !== "locked";
   const fonts = brandingFontVariables(branding.typography);
   const themeStyle = {
@@ -93,6 +94,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <TenantNavigation items={[
             { label: "Home", href: tenantHref("/home"), section: "home" },
             ...(hasPulse ? [{ label: "Pulse", href: tenantHref("/dashboard"), section: "pulse" as const }] : []),
+            ...(hasCanvas ? [{ label: "Canvas", href: tenantHref("/canvas"), section: "canvas" as const }] : []),
             ...(hasConnect && canOperateConnect ? [{ label: "Connect", href: tenantHref("/admin/connect"), section: "connect" as const }] : []),
             { label: "Settings", href: tenantHref("/admin"), section: "settings" },
           ]} />

@@ -30,6 +30,15 @@ test("the Pulse demo owns governed KPI definitions, target variance and a stale 
   assert.equal(staleDataset.sourceAge, "3 days");
 });
 
+test("each demo tenant includes a published Pulse view and Canvas board", () => {
+  for (const tenant of demoTenants) {
+    assert.equal(tenant.views.length, 2);
+    assert.ok(tenant.views.some((view) => view.surface === "pulse" && view.isDefault && view.status === "published"));
+    assert.ok(tenant.views.some((view) => view.surface === "canvas" && view.visibility === "tenant"));
+    assert.ok(tenant.views.every((view) => view.widgets.length > 0));
+  }
+});
+
 test("no node can reference the other tenant's hierarchy", () => {
   const firstIds = new Set(demoTenants[0].nodes.map((node) => node.id));
   const secondIds = new Set(demoTenants[1].nodes.map((node) => node.id));

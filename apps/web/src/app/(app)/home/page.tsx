@@ -138,8 +138,7 @@ export default async function ProductHomePage() {
           title="Canvas"
           description="Build your own boards from the same governed datasets and KPI definitions that power Pulse."
           status={canvasStatus}
-          href={null}
-          roleMessage="Included for your company. Canvas is being prepared for launch."
+          href={canvasStatus === "active" || canvasStatus === "trial" ? tenantHref("/canvas") : null}
         />
       </section>
     </div>
