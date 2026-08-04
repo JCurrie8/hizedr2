@@ -185,5 +185,23 @@ describe("SharePoint connector persistence", () => {
       actorUserId: fixture.profileId,
     });
     expect(claim?.leaseToken).toMatch(/^[0-9a-f-]{36}$/);
+
+    await admin.query(
+      `update public.tenants set status = 'suspended' where id = $1`,
+      [fixture.tenantId],
+    );
+    await admin.query(
+      `update public.connector_sync_state
+       set next_poll_at = '2000-01-01T00:00:00Z', next_retry_at = null,
+           lease_token = null, lease_expires_at = null
+       where connector_id = $1 and tenant_id = $2`,
+      [created.connectorId, fixture.tenantId],
+    );
+    await expect(claimDueSharePointSyncs(1)).resolves.toEqual([]);
+
+    await admin.query(
+      `update public.tenants set status = 'active' where id = $1`,
+      [fixture.tenantId],
+    );
   });
 });

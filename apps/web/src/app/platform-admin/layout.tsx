@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { SignOutButton } from "@/components/SignOutButton";
+import Link from "next/link";
 
 export default async function PlatformAdminLayout({ children }: { children: React.ReactNode }) {
   const ctx = await getAuthContextFromRequest({ platformAdminRoute: true });
@@ -23,6 +24,8 @@ export default async function PlatformAdminLayout({ children }: { children: Reac
         <div className="mx-auto flex max-w-5xl items-center gap-4 px-6 py-3">
           <span className="font-display text-lg font-bold text-white">Hized — Platform Admin</span>
           <nav className="ml-auto flex items-center gap-4 text-sm text-mist">
+            <Link href="/platform-admin" className="hover:text-white">Tenants</Link>
+            <Link href="/platform-admin/audit" className="hover:text-white">Audit</Link>
             <span>{ctx.fullName ?? "You"}</span>
             <SignOutButton />
           </nav>

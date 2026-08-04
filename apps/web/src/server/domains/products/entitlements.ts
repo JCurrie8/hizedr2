@@ -37,9 +37,11 @@ export async function hasProductAccess(
     `select exists (
        select 1
        from public.tenant_product_entitlements
-       where tenant_id = $1
-         and product_key = $2
-         and status in ('active', 'trial')
+       join public.tenants on tenants.id = tenant_product_entitlements.tenant_id
+       where tenant_product_entitlements.tenant_id = $1
+         and tenant_product_entitlements.product_key = $2
+         and tenant_product_entitlements.status in ('active', 'trial')
+         and tenants.status = 'active'
      ) as allowed`,
     [input.tenantId, input.productKey],
   );
