@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.2 |
+| Document status | Build-ready product definition — Version 2.3 |
 
 ### Changes since v1.0
 
@@ -84,6 +84,12 @@ This specification is designed to be handed to an AI software builder, technical
 - **The authenticated tenant entry is a product hub.** After organisation selection, users land on Home rather than being dropped into Pulse. Home shows Pulse, Connect and Canvas, their company-level availability and any separate role limitation, with direct entry to available areas.
 - **Commercial entitlements are server-enforced.** Hized Platform Administration controls whether each tenant product is active, on trial or locked. Company Admins configure an enabled product but cannot self-enable a product the company has not purchased. Locked products remain discoverable with a lock and a marketing “Find out more” route; typed URLs, server actions, OAuth callbacks and background jobs must enforce the same entitlement.
 - **Tenant Settings is a platform capability, not an upsell module.** Organisation structure, users/access, branding and audit live behind one Settings landing. Role checks still govern each setting, independently from product subscription access.
+
+### Changes since v2.2
+
+- **Automated performance-report delivery is a governed platform capability.** Authorised users can schedule published Pulse reports and Canvas boards for daily, weekly, monthly or calendar-based email delivery. Secure application links are the default; optional PDF or spreadsheet-compatible artefacts preserve the selected reporting period, filters, definition versions and data-freshness state.
+- **Every recipient receives only their own permitted view.** Scheduled content is resolved independently for each active tenant member at send time using that recipient's current tenant membership, role, organisation scope, metric and dataset permissions. A schedule owner or report creator's wider access is never inherited by an email, attachment or link. External email recipients are deferred beyond MVP.
+- **Connect incidents use the same delivery service.** Company Admins and Analysts can configure tenant-scoped notifications for pipeline failure, warning, stale source, schema drift, unusual or missing volume, retry exhaustion and recovery. The service deduplicates incidents, records delivery attempts, supports suppression, acknowledgement and escalation, and never includes credentials or sensitive row data in an email subject or body.
 
 ## 1. Product definition and positioning
 
@@ -233,6 +239,8 @@ Brand settings never change authentication, authorisation or row visibility. The
 | PULSE-004 | Support drill-down, drill-through and inspect-data actions. | Must | Users can trace an aggregate result to contributing segments and permitted records. |
 | PULSE-005 | Allow comparison with target, prior period, prior year, forecast and benchmark. | Must | Comparison bases are explicit and reusable across widgets. |
 | PULSE-006 | Provide export to CSV, Excel-compatible files, image and PDF report formats subject to permission. | Should | Exports preserve active filters and are recorded in the audit log. |
+| PULSE-007 | Allow authorised users to schedule a published Pulse report for themselves or permitted tenant recipients. | Must | Daily, weekly, monthly and calendar-based schedules preserve the report period and filters, use the tenant time zone, and create an auditable delivery record. |
+| PULSE-008 | Resolve scheduled report content separately under every recipient's current access at send time. | Must | A recipient never receives a metric, row, organisation branch or attachment that they could not open directly in Pulse at the time of delivery. |
 
 ### 4.3 KPI catalogue and scorecards
 
@@ -274,9 +282,14 @@ Every important metric should be represented as a governed KPI definition rather
 - Target alerts: metric is outside an allowed variance from target.
 - Trend alerts: sustained deterioration or unusual rate of change.
 - Data alerts: refresh failure, stale data, schema drift or missing volume.
-- Scheduled reports: daily, weekly, monthly or calendar-based delivery.
-- Channels: in-app and email for MVP; Teams, Slack, SMS and push can follow.
-- Alert deduplication, acknowledgement, suppression windows and escalation rules.
+- Scheduled reports: daily, weekly, monthly or calendar-based delivery from a published Pulse report or Canvas board. Tenant time zone, reporting period, active filters, governed definition versions and data freshness are explicit in every generated pack.
+- A member may subscribe themselves to content they can view. Company Admins and Analysts may configure organisational schedules for active tenant members within the schedule owner's administration scope; recipient sets may be named members or dynamic role/organisation groups resolved at execution time.
+- Secure authenticated links are the default email call to action. Optional PDF and spreadsheet-compatible attachments are generated per recipient only when the underlying report permits that export; attachment size and sensitivity policies may force link-only delivery.
+- The scheduler rechecks product entitlement, membership status, role, organisation scope, dataset/metric access and report publication status for every recipient at send time. It skips unauthorised recipients with a reason in the delivery ledger rather than falling back to the schedule creator's view.
+- Email subjects and preview text contain no sensitive row-level data. Opening a secure link rechecks current authorisation; a frozen attachment is an auditable export and follows retention controls.
+- Channels: in-app and transactional email for MVP; Teams, Slack, SMS and push can follow through the same event/delivery contract.
+- Alert deduplication, acknowledgement, quiet hours, suppression windows, retries with backoff, recovery messages and severity-based escalation rules.
+- Every send has an idempotency key, recipient, content/snapshot reference, template version, provider outcome and timestamps. Retries cannot create duplicate report or incident emails.
 
 ## 5. Hized Connect ETL scope
 
@@ -298,6 +311,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-008 | Persist source-specific incremental checkpoints with an optional overlap window and idempotent upsert key. | Must | A delayed, failed or retried CRM run neither misses records nor duplicates previously loaded records; checkpoints advance only after a successful complete run. |
 | CONN-009 | Support several connectors and pipelines per tenant without implying that every feed must be combined. | Must | A company can ingest finance, CRM, service and spreadsheet feeds independently, then select only the sources needed by each governed dataset/KPI. |
 | CONN-010 | Provide a Hized-managed Custom ETL delivery path for unsupported sources and bespoke cross-source rules. | Should | A custom implementation is commercially distinguishable from standard Connect, versioned and supportable, but its credentials, source batches, validations, retries, lineage and run health remain visible through the ordinary Connect operating surface. |
+| CONN-011 | Send configurable operational notifications for pipeline failure, warning, stale source, schema drift, unusual or missing volume, retry exhaustion and recovery. | Must | Company Admins and Analysts can select tenant members and severity rules; duplicate retries produce one incident thread, a recovery closes it, and every attempted in-app/email delivery is auditable. |
 
 ### 5.3 Pipeline capabilities
 
@@ -320,6 +334,8 @@ Connections and pipelines are separate concepts. A Company Admin authorises a co
 - Schema-drift detection for new, removed or changed columns.
 - Pipeline logs, run status, duration, rows extracted/loaded/rejected and source watermark.
 - Notifications for failures, warnings, stale pipelines and unusual data volumes.
+- Operational notifications identify the connector/pipeline, environment, severity, first/last observed time and a secure run-detail link, but never disclose stored credentials or sensitive source rows in the subject or message body.
+- Repeated events for the same pipeline incident are deduplicated during a configurable cooldown. Retry exhaustion can escalate; the first successful healthy run after an incident emits a recovery event and closes the incident.
 
 ### 5.4 Operational screens
 
@@ -366,6 +382,7 @@ Where Pulse is the governed backbone — curated templates, approved KPIs, role-
 | CANVAS-004 | Users can duplicate an existing board as a starting point for a new one. | Should | Duplication preserves lineage back to the datasets and KPIs it draws from. |
 | CANVAS-005 | A Company Admin can promote a Canvas calculated field or board into the governed KPI catalogue / dashboard template set. | Should | A promoted field becomes a versioned, owned KPI definition, and boards built from it before promotion still reconcile. |
 | CANVAS-006 | Canvas usage (boards created, shared, viewed, most-used datasets) is visible to administrators. | Could | An admin can see adoption and identify which self-serve boards are candidates for promotion into Pulse. |
+| CANVAS-007 | Allow authorised users to schedule a published Canvas board through the shared report-delivery service. | Must | Each recipient's render honours that recipient's current board, dataset, field, row and export permissions; inaccessible widgets are never rendered using the creator's access. |
 
 ### 6.4 Governance guardrail
 
@@ -425,7 +442,10 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 | KPI Value | Calculated result | Period, organisation scope, actual, target and comparison | KpiValueId |
 | Dashboard / Widget | Pulse presentation | Layout, filters, visual configuration and access | DashboardId, WidgetId |
 | Canvas Board / Local Field | Self-serve presentation | User-composed layout, personal calculated fields, sharing scope and promotion status | BoardId, LocalFieldId |
-| Alert / Notification | Exception management | Rule, event, recipient, acknowledgement and status | AlertRuleId, AlertEventId |
+| Alert / Incident | Exception management | Rule, event, severity, deduplication key, acknowledgement, escalation and recovery state | AlertRuleId, IncidentId, AlertEventId |
+| Report Schedule / Snapshot | Automated performance delivery | Pulse report or Canvas board, cadence, time zone, period/filter contract, recipient selector and frozen artefact metadata | ReportScheduleId, ReportSnapshotId |
+| Notification Delivery | Reliable channel delivery | Recipient, channel, template version, idempotency key, attempt/provider outcome, suppression and retention state | DeliveryId |
+| Recipient Preference | Member notification control | Channel preference, quiet hours, severity and self-subscriptions within administrator-required minimums | NotificationPreferenceId |
 | Comment / Action | Performance follow-up | Narrative, owner, due date, status and evidence | ActionId |
 
 ### 8.2 Semantic layer rules
@@ -467,6 +487,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 | Background processing | Scheduled workers/background jobs for connectors, transformations, scheduled jobs and notifications. |
 | Cache / queue | A managed queue for asynchronous jobs and notifications; add a cache layer only once performance requires it. |
 | Object storage | Cloudflare R2 (S3-compatible, zero egress fees) for source files, exports and report artefacts. |
+| Transactional email | Provider-neutral email adapter with domain authentication, bounce/suppression handling and no coupling to marketing-email workflows. |
 | Authentication | Better Auth (email/password, magic link, OAuth), self-hosted on the same Neon database, for the MVP; SSO/Entra federation added as a paid connector for enterprise tenants that require it. |
 | Deployment | Vercel for the web application; Neon-managed database branching for environments; separate development, staging and production environments with automated CI/CD. |
 | Observability | Structured logging and error tracking (e.g. Sentry) integrated into the Next.js app and background workers. |
@@ -483,6 +504,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Tenant isolation is enforced primarily through Postgres Row-Level Security policies keyed on TenantId, not solely through application-layer checks. The session context those policies read is set by trusted server-side code once per request, immediately after verifying the caller's identity — not derived from anything client-supplied.
 - For early clients, use a shared application with strong logical isolation; support dedicated infrastructure (a separate database) as an enterprise option.
 - No client can enumerate or infer another tenant's users, data, identifiers, exports or logs.
+- Background report and notification jobs must establish tenant and recipient identity before reading content. A report is rendered once per recipient under that recipient's current RLS/application permissions, never once under the creator and reused across recipients.
 - Support tenant-specific branding, time zone, financial calendar, retention, data residency and feature flags.
 - Create automated tests specifically designed to detect cross-tenant access failures.
 - Reject any attempt to set tenant session context without a verified user identity. Client-supplied routing headers, tenant IDs or profile IDs are never accepted as proof of authorization.
@@ -495,12 +517,14 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Least-privilege, read-only source connections wherever possible.
 - MFA and SSO for privileged users.
 - Immutable audit events for authentication, permissions, exports, connector changes and sensitive data access.
+- Automated attachments are treated as sensitive exports: generation, delivery, download/expiry and retention are auditable, and provider metadata must not contain report data.
 - Invitation signup and acceptance are authorized by a single-use, expiring, high-entropy token bound to the invited email. The raw token is never stored.
 - Row policies and column privileges work together: self-service profile updates cannot alter identity linkage, staff status or other authorization attributes.
 - Rate limiting, input validation, secure file scanning and protection against injection and cross-site attacks.
 - Backup, point-in-time recovery and tested restoration procedures.
 - Data retention and deletion workflows, including tenant offboarding.
 - Privacy impact assessment for employee-level data.
+- Production email requires a verified sending domain with SPF and DKIM plus an appropriate DMARC policy, bounce/complaint suppression and unsubscribe/preference behaviour where legally applicable. Platform transactional delivery remains separate from marketing consent and campaigns.
 
 ### 9.4 Non-functional requirements
 
@@ -539,6 +563,8 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 | US-ADMIN-01 | As an administrator, I want to define a KPI once and reuse it across dashboards so that reports remain consistent. | Must | Definition, formula, thresholds, owner and version are stored centrally. |
 | US-DATA-01 | As a data owner, I want failed or stale pipelines to generate actionable alerts so that users do not unknowingly rely on outdated data. | Must | The dashboard displays freshness and pipeline incident status. |
 | US-CANVAS-01 | As an analyst, I want to build my own dashboard from governed datasets without waiting on engineering so that I can answer a one-off question quickly. | Should | The analyst can create, save and share a board using only approved datasets and fields, without altering any governed KPI. |
+| US-REPORT-01 | As a manager, I want my weekly Pulse or Canvas pack delivered automatically so that the performance rhythm does not depend on somebody exporting it manually. | Must | The scheduled email arrives in the tenant time zone with the intended period/filters, and its content is rendered under the recipient's current access. |
+| US-DATA-02 | As an analyst, I want an ETL failure followed by a recovery notification so that I can act quickly without receiving duplicate noise from every retry. | Must | One deduplicated incident records delivery attempts, escalation and the healthy recovery event. |
 | US-PLATADMIN-01 | As a platform admin, I want to provision a new tenant and see its health alongside every other tenant so that I can run Hized's whole client base from one place. | Must | A new tenant is created via the platform admin UI, and immediately appears in the cross-tenant list with the same health indicators as existing tenants. |
 
 ### 10.3 Example cross-layer drill journey
@@ -569,8 +595,8 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Executive, department, team and employee dashboard templates (Pulse).
 - Self-serve board building on governed datasets (Canvas), including sharing and promotion to the governed catalogue.
 - Core visual widgets, filters, drill-down and permitted record detail.
-- In-app and email alerts for KPI thresholds, stale data and failed refreshes.
-- PDF and spreadsheet-compatible scheduled reporting.
+- In-app and transactional email alerts for KPI thresholds and Connect failures, warnings, stale sources, schema drift, volume anomalies, retry exhaustion and recovery, with deduplication and delivery history.
+- Automated daily, weekly, monthly and calendar-based delivery of published Pulse reports and Canvas boards to active tenant members, using secure links and permission-controlled PDF or spreadsheet-compatible artefacts.
 - Branding, audit log (including platform-admin cross-tenant access — PLATFORM-003), basic support tools and operational monitoring.
 
 ### 11.3 Explicitly out of scope for MVP
@@ -618,6 +644,8 @@ Use a field-service, customer-care, logistics, energy, construction or installat
 11. A Canvas board built by one user cannot expose data the viewer isn't otherwise permitted to see.
 12. A platform admin can provision and view every tenant, and every one of those cross-tenant actions is independently visible in the audit log — not just the client-facing audit trail.
 13. Knowing an invited email address without the matching raw invitation token cannot create an account or membership; the same valid token can be consumed by the matching already-authenticated user to join another tenant.
+14. A scheduled Pulse or Canvas delivery is resolved separately for each recipient and cannot expose data, filters, organisation scopes or exports that recipient could not access directly at send time.
+15. Repeated ETL retries produce one deduplicated incident notification flow, with auditable attempts, escalation when configured and an explicit recovery after the next healthy run.
 
 ### 12.2 Definition of done for each feature
 
@@ -633,7 +661,7 @@ Use a field-service, customer-care, logistics, energy, construction or installat
 
 ### 12.3 Demo data requirement
 
-The codebase should contain a synthetic demonstration tenant representing an installation and service business. It should include regions, teams, employees, jobs, sales, customer service and finance KPIs. Synthetic data must clearly demonstrate target variance, hierarchy drill-down, stale data, an ETL warning and at least one promoted Canvas board.
+The codebase should contain a synthetic demonstration tenant representing an installation and service business. It should include regions, teams, employees, jobs, sales, customer service and finance KPIs. Synthetic data must clearly demonstrate target variance, hierarchy drill-down, stale data, a deduplicated ETL warning/recovery notification, at least one promoted Canvas board and one recipient-safe scheduled report delivery.
 
 This requirement is delivered progressively by the epic that owns each schema. EPIC-01 supplies two isolated tenant shells plus the installation/service organisation hierarchy (regions, teams and synthetic employees). EPIC-04/05 add jobs, ingestion and the warning run; EPIC-06/07/08 add governed sales, customer-service and finance KPIs with drill-down, target variance and stale-data states; EPIC-12 adds the promoted Canvas board. Earlier phases must not create placeholder production tables merely to make the final demo appear complete.
 
@@ -691,7 +719,7 @@ This requirement is delivered progressively by the epic that owns each schema. E
 | EPIC-07 | Dashboard runtime, filter context and core widgets. | Must | A dashboard loads real curated data with responsive states. |
 | EPIC-08 | Hierarchy drill-down and row-level employee security. | Must | Executive, manager and employee views return different permitted scopes. |
 | EPIC-09 | Targets, commentary, actions and period snapshots. | Should | Performance review history is retained. |
-| EPIC-10 | Alerts, scheduled reports, exports and notification centre. | Should | Threshold and data-freshness events reach selected users. |
+| EPIC-10 | Shared alerts, incident handling, scheduled Pulse/Canvas reports, exports and notification centre. | Must | Selected tenant members receive recipient-safe performance packs and deduplicated ETL incident/recovery messages; delivery attempts, suppression and exports are auditable. |
 | EPIC-11 | Audit, support tooling, monitoring, backup and pilot hardening. | Must | Operational runbook and recovery checks are complete. |
 | EPIC-12 | Hized Canvas self-serve board builder, local calculated fields and promotion-to-catalogue workflow. | Should | Analysts can build, save and share a board using only governed datasets; a promoted board's calculated field becomes a versioned KPI. |
 | EPIC-13 | Platform Administration: tenant provisioning, cross-tenant list, and platform-admin audit trail distinguishable from tenant-level audit. | Must | A platform admin creates a tenant end to end and every cross-tenant view/action is independently auditable (PLATFORM-001/002/003). |
