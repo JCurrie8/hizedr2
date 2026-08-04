@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
+import { postLoginDestination } from "./login-routing";
 
 export function LoginForm() {
   const router = useRouter();
@@ -24,7 +25,7 @@ export function LoginForm() {
           setError(signInError.message ?? "Could not sign in.");
           return;
         }
-        router.push("/organisations");
+        router.push(postLoginDestination(window.location.hostname));
         router.refresh();
       }}
     >
