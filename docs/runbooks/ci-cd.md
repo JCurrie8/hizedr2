@@ -34,6 +34,13 @@ The CI database proves that the cumulative migrations and new application code w
 
 Migration `0013_security_hardening.sql` intentionally removes the insecure email-only invitation functions. Apply it before deploying its application code: the old application will temporarily fail closed for new signups after the migration, while deploying the new application first would call functions that do not exist yet. Coordinate that brief signup maintenance window rather than allowing either mismatch to persist.
 
+## Production runtime database binding
+
+- Vercel Production `DATABASE_URL` must use the pooled Neon `production` branch endpoint and the restricted `app_user` role. Never give the application the migration owner connection.
+- Before a release, compare only the endpoint hostname and database role; do not print or persist the connection string. Confirm the same branch contains the expected migration ledger and a known production identity.
+- Vercel environment-variable updates apply to fresh deployments. Use the normal protected merge-to-`main` path after changing a production variable; rebuilding an older deployment can retain that deployment's original environment snapshot.
+- After deployment, verify a known account reaches password validation rather than `User not found`, load the apex and wildcard login routes, and scan the new deployment's runtime errors.
+
 ## Failure safety
 
 The database job fails closed when either connection secret or the explicit safety variable is absent. If a URL is changed, re-check the Neon branch before re-enabling `CI_DATABASE_SAFE_TO_MUTATE`; the migration connection has schema-owner privileges and can make irreversible changes to the selected database.
