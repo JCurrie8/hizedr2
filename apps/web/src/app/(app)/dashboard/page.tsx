@@ -12,6 +12,8 @@ import {
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { redirect } from "next/navigation";
+import { AnalyticsViewRenderer } from "@/components/visuals/AnalyticsViewRenderer";
+import { getDefaultPulseView, loadAnalyticsViewRuntime } from "@/server/domains/analytics/visual-views";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -97,20 +99,26 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const requestedOrgNodeId = requestedOrg && UUID_PATTERN.test(requestedOrg) ? requestedOrg : null;
 
   const includeConnectHealth = ctx.role === "company_admin" || ctx.role === "analyst";
-  const [requestHeaders, snapshot] = await Promise.all([
+  const [requestHeaders, pulseResult] = await Promise.all([
     headers(),
     withUserContext(
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "pulse" })) return null;
-        return getPulseHomeSnapshot(client, { tenantId: ctx.tenant.id, includeConnectHealth, requestedOrgNodeId });
+        const snapshot = await getPulseHomeSnapshot(client, { tenantId: ctx.tenant.id, includeConnectHealth, requestedOrgNodeId });
+        const defaultView = await getDefaultPulseView(client, { tenantId: ctx.tenant.id });
+        const configuredView = defaultView
+          ? await loadAnalyticsViewRuntime(client, { tenantId: ctx.tenant.id, viewId: defaultView.id, requestedOrgNodeId })
+          : null;
+        return { snapshot, configuredView };
       },
     ),
   ]);
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });
-  if (!snapshot) redirect(tenantHref("/home"));
+  if (!pulseResult) redirect(tenantHref("/home"));
+  const { snapshot, configuredView } = pulseResult;
   const firstName = ctx.fullName?.trim().split(/\s+/)[0] ?? null;
   const connect = snapshot.connect;
   const kpis = snapshot.kpis;
@@ -193,7 +201,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         ))}
       </section>
 
-      {hierarchy && (
+      {configuredView && (
+        <section aria-labelledby="configured-pulse-heading" className="mt-7">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.16em] text-teal-deep">Configured company view</p>
+              <h2 id="configured-pulse-heading" className="mt-1 font-display text-2xl font-semibold text-ink">{configuredView.view.name}</h2>
+            </div>
+            {(ctx.role === "company_admin" || ctx.role === "analyst") && <Link href={tenantHref(`/admin/dashboards/${configuredView.view.id}`)} className="rounded-md border border-line bg-panel px-3 py-2 text-sm font-semibold text-ink hover:border-teal-deep">Configure Pulse</Link>}
+          </div>
+          <AnalyticsViewRenderer runtime={configuredView} />
+        </section>
+      )}
+
+      {hierarchy && !configuredView && (
         <section aria-labelledby="performance-heading" className="mt-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>

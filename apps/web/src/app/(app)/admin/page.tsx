@@ -5,6 +5,13 @@ import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 
 const settings = [
   {
+    title: "Pulse views",
+    description: "Compose and publish the company dashboard from governed visuals.",
+    path: "/admin/dashboards",
+    adminOnly: false,
+    allowedRoles: ["company_admin", "analyst"],
+  },
+  {
     title: "KPI catalogue",
     description: "Review governed definitions, versions, owners and source datasets.",
     path: "/admin/kpis",

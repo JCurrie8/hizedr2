@@ -20,7 +20,7 @@ function printPlan(target) {
       return result;
     }, {});
     console.log(
-      `- ${tenant.name} [${tenant.slug}]: ${tenant.nodes.length} nodes, ${tenant.datasets.length} datasets, ${tenant.kpis.length} KPIs`,
+      `- ${tenant.name} [${tenant.slug}]: ${tenant.nodes.length} nodes, ${tenant.datasets.length} datasets, ${tenant.kpis.length} KPIs, ${tenant.views.length} views`,
       counts,
     );
   }
@@ -185,6 +185,46 @@ async function upsertTenant(client, tenant, target) {
           tenant.seedPrincipal.profileId,
         ],
       );
+    }
+  }
+
+  for (const view of tenant.views) {
+    await client.query(
+      `insert into public.analytics_views
+         (id, tenant_id, surface, name, description, owner_user_id, visibility,
+          status, is_default, created_by, updated_by)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $6, $6)
+       on conflict (id) do update set
+         name = excluded.name, description = excluded.description,
+         visibility = excluded.visibility, status = excluded.status,
+         is_default = excluded.is_default, updated_by = excluded.updated_by,
+         updated_at = now()`,
+      [view.id, tenant.id, view.surface, view.name, view.description, principal.profileId, view.visibility, view.status, view.isDefault],
+    );
+    for (const widget of view.widgets) {
+      await client.query(
+        `insert into public.analytics_widgets
+           (id, tenant_id, view_id, title, subtitle, visual_type, source_mode,
+            position, width, height, created_by, updated_by)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+         on conflict (id) do update set
+           title = excluded.title, subtitle = excluded.subtitle,
+           visual_type = excluded.visual_type, source_mode = excluded.source_mode,
+           position = excluded.position, width = excluded.width,
+           height = excluded.height, updated_by = excluded.updated_by,
+           updated_at = now()`,
+        [widget.id, tenant.id, view.id, widget.title, widget.subtitle, widget.visualType, widget.sourceMode, widget.position, widget.width, widget.height, principal.profileId],
+      );
+      await client.query("delete from public.analytics_widget_metrics where tenant_id = $1 and widget_id = $2", [tenant.id, widget.id]);
+      if (widget.metricIds.length) {
+        await client.query(
+          `insert into public.analytics_widget_metrics
+             (tenant_id, widget_id, kpi_definition_id, position)
+           select $1, $2, metric_id, ordinal - 1
+           from unnest($3::uuid[]) with ordinality as selected(metric_id, ordinal)`,
+          [tenant.id, widget.id, widget.metricIds],
+        );
+      }
     }
   }
 

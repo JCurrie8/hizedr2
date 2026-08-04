@@ -216,20 +216,25 @@ describe("RLS tenant isolation", () => {
       [[
         "accept_invitation_by_token",
         "approve_kpi_definition_version",
+        "can_edit_analytics_view",
         "can_read_governed_dataset",
+        "can_read_analytics_view_child",
+        "can_read_analytics_view_row",
         "can_read_kpi_definition",
         "can_read_kpi_definition_row",
         "can_read_kpi_value",
         "current_user_has_tenant_access",
         "current_user_tenant_ids",
+        "can_use_analytics_surface",
         "get_membership_for_slug",
         "get_profile_for_auth_user",
         "has_pending_invitation_by_token",
         "is_connect_operator",
         "is_kpi_governor",
+        "has_analytics_view_grant",
       ]],
     );
-    expect(rows).toHaveLength(13);
+    expect(rows).toHaveLength(18);
     expect(rows.every((row) => row.public_execute === false)).toBe(true);
   });
 

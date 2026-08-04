@@ -37,6 +37,45 @@ function tenant(number, details) {
       }),
     };
   });
+  const pulseWidgets = kpis.flatMap((kpi, index) => [
+    {
+      id: stableId(number, 720 + index * 2),
+      title: kpi.name,
+      subtitle: "Current governed performance and target",
+      visualType: "kpi",
+      sourceMode: "current",
+      position: index,
+      width: kpis.length === 1 ? 12 : 6,
+      height: "compact",
+      metricIds: [kpi.id],
+    },
+  ]);
+  pulseWidgets.push({
+    id: stableId(number, 740),
+    title: "Performance detail",
+    subtitle: "Exact governed values, targets and variance",
+    visualType: "table",
+    sourceMode: "current",
+    position: pulseWidgets.length,
+    width: 12,
+    height: "standard",
+    metricIds: kpis.map((kpi) => kpi.id),
+  });
+  const views = [
+    {
+      id: stableId(number, 700), surface: "pulse", name: "Company performance",
+      description: "The published company-wide view of governed performance.", visibility: "tenant", status: "published", isDefault: true,
+      widgets: pulseWidgets,
+    },
+    {
+      id: stableId(number, 701), surface: "canvas", name: "Weekly leadership review",
+      description: "A reusable Canvas board for discussing current results against target.", visibility: "tenant", status: "published", isDefault: false,
+      widgets: kpis.map((kpi, index) => ({
+        id: stableId(number, 760 + index), title: `${kpi.name} against target`, subtitle: "Compact actual-versus-target view",
+        visualType: "bullet", sourceMode: "current", position: index, width: kpis.length === 1 ? 12 : 6, height: "compact", metricIds: [kpi.id],
+      })),
+    },
+  ];
 
   return {
     id: stableId(number, 1),
@@ -53,10 +92,11 @@ function tenant(number, details) {
     nodes,
     datasets,
     kpis,
+    views,
   };
 }
 
-export const DEMO_SEED_VERSION = "pulse-v1";
+export const DEMO_SEED_VERSION = "visuals-v1";
 export const DEMO_VALID_FROM = "2026-01-01";
 
 export const demoTenants = [
@@ -202,6 +242,7 @@ export function validateDemoData() {
       ...demoTenant.nodes.flatMap((node) => [node.id, node.versionId]),
       ...demoTenant.datasets.map((dataset) => dataset.id),
       ...demoTenant.kpis.flatMap((kpi) => [kpi.id, ...kpi.values.map((value) => value.id)]),
+      ...demoTenant.views.flatMap((view) => [view.id, ...view.widgets.map((widget) => widget.id)]),
     ];
     for (const id of tenantIds) {
       if (ids.has(id)) throw new Error(`Duplicate stable ID ${id}`);

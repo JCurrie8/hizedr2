@@ -6,13 +6,14 @@ import { usePathname } from "next/navigation";
 interface NavigationItem {
   label: string;
   href: string;
-  section: "home" | "pulse" | "connect" | "settings";
+  section: "home" | "pulse" | "canvas" | "connect" | "settings";
 }
 
 export function activeSection(pathname: string): NavigationItem["section"] | null {
   const tenantPath = pathname.replace(/^\/t\/[a-z0-9]+(?:-[a-z0-9]+)*/, "") || "/";
   if (tenantPath === "/home") return "home";
   if (tenantPath === "/dashboard" || tenantPath.startsWith("/dashboard/")) return "pulse";
+  if (tenantPath === "/canvas" || tenantPath.startsWith("/canvas/")) return "canvas";
   if (tenantPath === "/admin/connect" || tenantPath.startsWith("/admin/connect/")) return "connect";
   if (tenantPath === "/admin" || tenantPath.startsWith("/admin/")) return "settings";
   return null;

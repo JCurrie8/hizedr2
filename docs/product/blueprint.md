@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.3 |
+| Document status | Build-ready product definition — Version 2.4 |
 
 ### Changes since v1.0
 
@@ -90,6 +90,13 @@ This specification is designed to be handed to an AI software builder, technical
 - **Automated performance-report delivery is a governed platform capability.** Authorised users can schedule published Pulse reports and Canvas boards for daily, weekly, monthly or calendar-based email delivery. Secure application links are the default; optional PDF or spreadsheet-compatible artefacts preserve the selected reporting period, filters, definition versions and data-freshness state.
 - **Every recipient receives only their own permitted view.** Scheduled content is resolved independently for each active tenant member at send time using that recipient's current tenant membership, role, organisation scope, metric and dataset permissions. A schedule owner or report creator's wider access is never inherited by an email, attachment or link. External email recipients are deferred beyond MVP.
 - **Connect incidents use the same delivery service.** Company Admins and Analysts can configure tenant-scoped notifications for pipeline failure, warning, stale source, schema drift, unusual or missing volume, retry exhaustion and recovery. The service deduplicates incidents, records delivery attempts, supports suppression, acknowledgement and escalation, and never includes credentials or sensitive row data in an email subject or body.
+
+### Changes since v2.3
+
+- **Pulse and Canvas share one governed visual grammar.** A saved view contains layout, presentation and references to approved KPI definitions; it never stores or copies resolved customer data. Pulse uses Company Admin/Analyst-published tenant templates, while Canvas lets every entitled active member start privately and share a published board.
+- **A broad initial visual catalogue is explicit.** The first renderer covers KPI, line, area, column, horizontal bar, target-attainment, donut, gauge, funnel, heatmap, exact table, text, line-and-column, waterfall, treemap, radar, scatter and bullet visuals. Visual choice is constrained by semantic compatibility so catalogue breadth does not create misleading analysis.
+- **Sharing never transfers data authority.** Pulse templates and Canvas boards resolve under the current viewer's tenant, membership, role, organisation scope and approved KPI access on every render. Named-user, role, organisation-area and whole-tenant grants may control access to a board, but are additional to—not substitutes for—underlying data permissions.
+- **Geospatial views require governed geography.** Maps remain an MVP requirement, but are enabled only after the governed dimension model supplies validated geographic identifiers or coordinates. Hized must not infer locations from labels or plot arbitrary organisation positions merely to claim map support.
 
 ## 1. Product definition and positioning
 
@@ -233,7 +240,7 @@ Brand settings never change authentication, authorisation or row visibility. The
 
 | ID | Requirement | Priority | Acceptance signal |
 |---|---|---|---|
-| PULSE-001 | Provide responsive dashboards with KPI cards, trend charts, categorical charts, tables, heatmaps, gauges, funnels, maps and text panels. | Must | A user can view dashboards on desktop and mobile without clipped or unreadable content. |
+| PULSE-001 | Provide responsive dashboards with KPI cards, trend/area/combo charts, categorical and proportional charts, tables, heatmaps, gauges, funnels, waterfall, treemap, radar, scatter, bullet, governed maps and text panels. | Must | A user can view dashboards on desktop and mobile without clipped or unreadable content; every chart has an accessible label and explicit no-data state. |
 | PULSE-002 | Support global and widget-level filters including date, organisation, geography, product, customer and custom dimensions. | Must | Filters consistently update all compatible widgets. |
 | PULSE-003 | Allow authorised creators to add, resize, reorder and configure widgets. | Should | Dashboard layouts persist per tenant and optionally per user. |
 | PULSE-004 | Support drill-down, drill-through and inspect-data actions. | Must | Users can trace an aggregate result to contributing segments and permitted records. |
@@ -241,6 +248,8 @@ Brand settings never change authentication, authorisation or row visibility. The
 | PULSE-006 | Provide export to CSV, Excel-compatible files, image and PDF report formats subject to permission. | Should | Exports preserve active filters and are recorded in the audit log. |
 | PULSE-007 | Allow authorised users to schedule a published Pulse report for themselves or permitted tenant recipients. | Must | Daily, weekly, monthly and calendar-based schedules preserve the report period and filters, use the tenant time zone, and create an auditable delivery record. |
 | PULSE-008 | Resolve scheduled report content separately under every recipient's current access at send time. | Must | A recipient never receives a metric, row, organisation branch or attachment that they could not open directly in Pulse at the time of delivery. |
+
+**Visual configuration contract:** creators choose a governed question, data shape (current selected area, visible child-area comparison or trend), compatible approved KPIs and responsive size. The platform may reject combinations whose units or cardinality would make a visual misleading. All visual types use a shared renderer and data contract across Pulse, Canvas, browser views and future scheduled artefacts; product-specific forks are not permitted. A table or inspect-data path remains available where a graphic alone would hide exact values. Saved layouts contain identifiers and configuration only, and are always re-resolved through the current viewer's RLS context.
 
 ### 4.3 KPI catalogue and scorecards
 
