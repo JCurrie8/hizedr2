@@ -150,6 +150,30 @@ describe("RLS tenant isolation", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("keeps Better Auth's trusted identity tables outside tenant RLS", async () => {
+    const { rows: tableState } = await admin.query(
+      `select c.relname as table_name, c.relrowsecurity, c.relforcerowsecurity,
+              (select count(*)::integer
+               from pg_policies p
+               where p.schemaname = n.nspname and p.tablename = c.relname) as policy_count
+       from pg_class c
+       join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public'
+         and c.relname = any($1::text[])
+       order by c.relname`,
+      [["account", "session", "twoFactor", "user", "verification"]],
+    );
+    expect(tableState).toHaveLength(5);
+    expect(tableState.every((table) =>
+      table.relrowsecurity === false && table.relforcerowsecurity === false && table.policy_count === 0
+    )).toBe(true);
+
+    const rows = await withUserContext({ userId: null }, (client) =>
+      client.query(`select id from public."user" where id = $1`, [tenantA.authUserId]).then((result) => result.rows),
+    );
+    expect(rows).toEqual([{ id: tenantA.authUserId }]);
+  });
+
   it("rejects a tenant context without an authenticated user", async () => {
     await expect(
       withUserContext({ userId: null, tenantId: tenantA.tenantId }, (c) =>
