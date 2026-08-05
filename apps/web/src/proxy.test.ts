@@ -22,6 +22,25 @@ describe("tenant proxy", () => {
     expect(response.headers.get("x-middleware-override-headers")).not.toContain("x-tenant-slug");
   });
 
+  it("overwrites a client-supplied x-pathname so MFA enforcement can't be skipped", () => {
+    // MFA enforcement exempts the enrolment page by pathname. If a client
+    // could assert "x-pathname: /admin/security" on every request, an
+    // unenrolled Company Admin would bypass enforcement everywhere.
+    const response = proxy(
+      new NextRequest("http://acme.localhost:3001/dashboard", {
+        headers: { host: "acme.localhost:3001", "x-pathname": "/admin/security" },
+      }),
+    );
+    expect(response.headers.get("x-middleware-request-x-pathname")).toBe("/dashboard");
+  });
+
+  it("reports the post-rewrite path for admin hostnames, not the requested one", () => {
+    const response = proxy(
+      new NextRequest("https://admin.hized.app/security", { headers: { host: "admin.hized.app" } }),
+    );
+    expect(response.headers.get("x-middleware-request-x-pathname")).toBe("/platform-admin/security");
+  });
+
   it("rewrites the apex path fallback with a server-derived tenant header", () => {
     const response = proxy(
       new NextRequest("https://hized-platform.vercel.app/t/northstar-installations/dashboard", {

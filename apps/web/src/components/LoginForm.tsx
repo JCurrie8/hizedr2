@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import { postLoginDestination } from "./login-routing";
+import { TwoFactorChallenge } from "./TwoFactorChallenge";
 
 export function LoginForm() {
   const router = useRouter();
@@ -11,6 +12,18 @@ export function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [needsSecondFactor, setNeedsSecondFactor] = useState(false);
+
+  if (needsSecondFactor) {
+    return (
+      <TwoFactorChallenge
+        onCancel={() => {
+          setNeedsSecondFactor(false);
+          setPassword("");
+        }}
+      />
+    );
+  }
 
   return (
     <form
@@ -19,10 +32,17 @@ export function LoginForm() {
         e.preventDefault();
         setError(null);
         setPending(true);
-        const { error: signInError } = await authClient.signIn.email({ email, password });
+        const { data, error: signInError } = await authClient.signIn.email({ email, password });
         setPending(false);
         if (signInError) {
           setError(signInError.message ?? "Could not sign in.");
+          return;
+        }
+        // The password was right but the account holds a second factor —
+        // Better Auth has NOT issued a session yet, so routing on now would
+        // just bounce off the auth gate.
+        if ((data as { twoFactorRedirect?: boolean } | null)?.twoFactorRedirect) {
+          setNeedsSecondFactor(true);
           return;
         }
         router.push(postLoginDestination(window.location.hostname));

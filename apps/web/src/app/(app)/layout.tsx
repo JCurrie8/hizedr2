@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
+import { mfaEnrolmentRedirect } from "@/server/domains/access-control/mfa-policy";
 import {
   accessibleForeground,
   brandingFontVariables,
@@ -36,6 +37,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   if (ctx.kind === "platform_admin") redirect("/"); // platform admins operate from admin.*, not a tenant subdomain
+
+  // Blueprint 9.3: privileged users must hold a second factor. Enforced here
+  // rather than in proxy.ts because the role isn't known until the tenant
+  // membership is resolved, which is a database read the edge layer avoids.
+  const mfaRedirect = mfaEnrolmentRedirect({
+    scope: "tenant",
+    role: ctx.role,
+    twoFactorEnabled: ctx.twoFactorEnabled,
+    pathname: (await headers()).get("x-pathname") ?? "",
+  });
+  if (mfaRedirect) redirect(mfaRedirect);
 
   const [requestHeaders, { branding, entitlements }] = await Promise.all([
     headers(),

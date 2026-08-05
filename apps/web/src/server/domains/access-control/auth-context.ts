@@ -9,6 +9,8 @@ export interface TenantAuthContext {
   fullName: string | null;
   isHizedStaff: boolean;
   isPlatformAdmin: boolean;
+  /** Better Auth's own flag — the source of truth for whether TOTP is set up. */
+  twoFactorEnabled: boolean;
   tenant: {
     id: string;
     slug: string;
@@ -23,6 +25,7 @@ export interface PlatformAdminAuthContext {
   kind: "platform_admin";
   profileId: string;
   fullName: string | null;
+  twoFactorEnabled: boolean;
 }
 
 export type AuthResult =
@@ -63,9 +66,18 @@ export async function getAuthContext(opts: {
   const profile = profileRows[0];
   if (!profile) return { kind: "unauthenticated" }; // provisioning didn't run — treat as not signed in
 
+  const twoFactorEnabled = Boolean(
+    (session.user as { twoFactorEnabled?: boolean | null }).twoFactorEnabled,
+  );
+
   if (opts.platformAdminRoute) {
     if (!profile.is_platform_admin) return { kind: "forbidden" };
-    return { kind: "platform_admin", profileId: profile.profile_id, fullName: profile.full_name };
+    return {
+      kind: "platform_admin",
+      profileId: profile.profile_id,
+      fullName: profile.full_name,
+      twoFactorEnabled,
+    };
   }
 
   if (!opts.tenantSlug) return { kind: "forbidden" };
@@ -105,6 +117,7 @@ export async function getAuthContext(opts: {
     fullName: profile.full_name,
     isHizedStaff: profile.is_hized_staff,
     isPlatformAdmin: profile.is_platform_admin,
+    twoFactorEnabled,
     tenant: {
       id: membership.tenant_id,
       slug: opts.tenantSlug,

@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
+import { mfaEnrolmentRedirect } from "@/server/domains/access-control/mfa-policy";
 import { SignOutButton } from "@/components/SignOutButton";
 import Link from "next/link";
 
@@ -18,6 +20,16 @@ export default async function PlatformAdminLayout({ children }: { children: Reac
     );
   }
 
+  // Platform Admin is the most privileged access in Hized (blueprint 7.4),
+  // so a second factor is required unconditionally — not role-dependent
+  // like the tenant side.
+  const mfaRedirect = mfaEnrolmentRedirect({
+    scope: "platform_admin",
+    twoFactorEnabled: ctx.twoFactorEnabled,
+    pathname: (await headers()).get("x-pathname") ?? "",
+  });
+  if (mfaRedirect) redirect(mfaRedirect);
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-line bg-ink">
@@ -26,6 +38,7 @@ export default async function PlatformAdminLayout({ children }: { children: Reac
           <nav className="ml-auto flex items-center gap-4 text-sm text-mist">
             <Link href="/platform-admin" className="hover:text-white">Tenants</Link>
             <Link href="/platform-admin/audit" className="hover:text-white">Audit</Link>
+            <Link href="/platform-admin/security" className="hover:text-white">Security</Link>
             <span>{ctx.fullName ?? "You"}</span>
             <SignOutButton />
           </nav>

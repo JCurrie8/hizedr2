@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Pool } from "@neondatabase/serverless";
 import { auth } from "../identity/auth";
 import { getAuthContext } from "./auth-context";
+import { mfaEnrolmentRedirect } from "./mfa-policy";
 import { hashToken } from "../identity/invitations";
 
 /**
@@ -97,5 +98,38 @@ describe("getAuthContext", () => {
   it("denies non-platform-admins on a platform-admin route", async () => {
     const result = await getAuthContext({ tenantSlug: null, platformAdminRoute: true, requestHeaders: sessionHeaders });
     expect(result.kind).toBe("forbidden");
+  });
+
+  it("carries Better Auth's real twoFactorEnabled flag through to MFA enforcement", async () => {
+    // The unit tests cover the policy in isolation; this covers the join
+    // the policy depends on — that a real Better Auth session actually
+    // surfaces twoFactorEnabled on the context. If this silently came back
+    // undefined, every privileged user would be treated as unenrolled (or,
+    // with the opposite bug, enforcement would never fire at all).
+    const result = await getAuthContext({ tenantSlug: tenantASlug, requestHeaders: sessionHeaders });
+    expect(result.kind).toBe("tenant");
+    if (result.kind !== "tenant") return;
+
+    expect(result.twoFactorEnabled).toBe(false); // freshly signed up, never enrolled
+
+    // This fixture is a 'manager', so enforcement correctly leaves them alone…
+    expect(
+      mfaEnrolmentRedirect({
+        scope: "tenant",
+        role: result.role,
+        twoFactorEnabled: result.twoFactorEnabled,
+        pathname: "/home",
+      }),
+    ).toBeNull();
+
+    // …but the same unenrolled account as a Company Admin must be stopped.
+    expect(
+      mfaEnrolmentRedirect({
+        scope: "tenant",
+        role: "company_admin",
+        twoFactorEnabled: result.twoFactorEnabled,
+        pathname: "/home",
+      }),
+    ).toBe("/admin/security");
   });
 });

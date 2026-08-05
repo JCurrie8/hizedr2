@@ -68,6 +68,18 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 
 ## Session Log
 
+### 2026-08-05 — Claude (Fable 5) (MFA enforcement — closing a Phase 0 decision)
+
+**Why this and not new breadth:** a plan audit against blueprint 11.4 found four delivery phases open at once (Phase 0 still `[~]` on two items, Connect `[~]`, Pulse/Canvas `[~]`) while the blueprint's own build rule in 13.1 says "do not start the next epic until the current acceptance criteria pass". The clearest single casualty was MFA — an explicit Phase 0 decision by the user *and* a blueprint 9.3 requirement ("MFA and SSO for privileged users") — still sitting as a known gap 30 migrations later with the plugin registered but no UI, no route and no enforcement. Closed that rather than opening anything new.
+
+Delivered: `mfa-policy.ts` (which roles require a second factor, plus the enrolment-page exemption), TOTP enrolment UI at `/admin/security` (tenant) and `/platform-admin/security`, a sign-in TOTP/backup-code challenge (`TwoFactorChallenge`) wired into `LoginForm` on Better Auth's `twoFactorRedirect`, and enforcement in both layouts. Company Admins are required; ordinary members are not (proportionality — the blueprint asks for privileged users specifically). Platform Admin is required unconditionally per blueprint 7.4.
+
+One security detail worth carrying forward: layouts cannot read the pathname, so enforcement takes it from a header, and enforcement exempts the enrolment page by pathname. A client-supplied `x-pathname: /admin/security` would therefore have bypassed MFA on *every* page. `proxy.ts` now deletes and re-derives `x-pathname` exactly as it already did for `x-tenant-slug`, and sets it to the post-rewrite path. Two regression tests cover it.
+
+Verified live against `vercel-dev` with a temporary unenrolled Company Admin (since removed): `/home` → `307 /admin/security`; the enrolment page itself → `200` with no redirect loop; a spoofed `x-pathname` header → still `307`. 118 web tests, typecheck, lint and production build all pass. Not done: enrolment is not yet exercised end-to-end with a real authenticator (Better Auth owns that verification), and there is still no Playwright coverage.
+
+Next: Phase 0 genuinely has two items left — the EPIC-01 walkthrough tail (accept the Harbour invitation, check the tenant switch) and the Phase 0 exit review. Recommend closing those before further Connect/Pulse/Canvas breadth. Note both this branch and `docs/domain-and-email-corrections` touch PROGRESS.md, so whichever merges second needs a rebase.
+
 ### 2026-08-04 — Codex (Pulse/Canvas production release + initial Platform Admin)
 
 Released the configurable Pulse and Canvas visual foundation through PR #14. After every hosted gate passed, applied migrations `0026_visual_dashboard_foundation.sql` and `0027_canvas_private_board_privacy.sql` transactionally to the verified Neon `production` branch, ran the guarded `visuals-v1` production seed, and verified both migration ledger entries, RLS on all four visual tables, all 16 policies, no `PUBLIC` execution on the visual authority helpers, and exactly two views in each demonstration tenant. Restricted `app_user` verification proved each seed principal still sees only its own tenant hierarchy/KPIs with zero cross-tenant nodes.
