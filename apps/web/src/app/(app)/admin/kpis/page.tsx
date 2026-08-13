@@ -3,11 +3,12 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
-import { listPublishedDatasetOptions } from "@/server/domains/pulse/kpi-governance";
+import { DIMENSION_SEMANTIC_TYPES, listGovernedDimensionOptions, listPublishedDatasetOptions } from "@/server/domains/pulse/kpi-governance";
 import { listKpiCatalogue } from "@/server/domains/pulse/kpis";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import {
   approveKpiDraftAction,
+  createGovernedDimensionAction,
   createKpiDraftAction,
   createNextKpiVersionAction,
   rejectKpiDraftAction,
@@ -24,11 +25,12 @@ export default async function KpiCataloguePage() {
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });
   if (ctx.role !== "company_admin" && ctx.role !== "analyst") redirect(tenantHref("/dashboard"));
 
-  const { catalogue, datasets } = await withUserContext(
+  const { catalogue, datasets, dimensions } = await withUserContext(
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
     async (client) => ({
       catalogue: await listKpiCatalogue(client, { tenantId: ctx.tenant.id }),
       datasets: await listPublishedDatasetOptions(client, { tenantId: ctx.tenant.id }),
+      dimensions: await listGovernedDimensionOptions(client, { tenantId: ctx.tenant.id }),
     }),
   );
   const approvedCount = catalogue.filter((entry) => entry.approvalStatus === "approved").length;
@@ -65,8 +67,44 @@ export default async function KpiCataloguePage() {
       <details className="mt-6 rounded-xl border border-line bg-panel p-5 sm:p-6">
         <summary className="cursor-pointer font-display text-xl font-semibold text-ink">Create a governed KPI</summary>
         <p className="mt-2 text-sm leading-6 text-muted">Analysts and Company Admins can prepare a complete draft. A Company Admin must review it before Pulse can use it.</p>
-        {datasets.length ? <KpiDefinitionForm action={createKpiDraftAction} datasets={datasets} /> : <p className="mt-4 text-sm text-danger">Publish a governed dataset in Connect before creating a KPI.</p>}
+        {datasets.length ? <KpiDefinitionForm action={createKpiDraftAction} datasets={datasets} dimensions={dimensions} /> : <p className="mt-4 text-sm text-danger">Publish a governed dataset in Connect before creating a KPI.</p>}
       </details>
+
+      <section className="mt-6 rounded-xl border border-line bg-panel p-5 sm:p-6" aria-labelledby="dimension-heading">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-teal-deep">Reusable filters</p>
+            <h2 id="dimension-heading" className="mt-1 font-display text-xl font-semibold text-ink">Governed dimensions</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">Define product, customer, geography or other business categories once. Link them to KPIs so every compatible Pulse visual uses the same member labels.</p>
+          </div>
+          <span className="text-xs text-muted">{dimensions.length} published</span>
+        </div>
+        {dimensions.length > 0 && (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {dimensions.map((dimension) => (
+              <article key={dimension.id} className="rounded-lg border border-line bg-canvas p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="font-semibold text-ink">{dimension.name}</h3>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold capitalize text-muted">{dimension.semanticType}</span>
+                </div>
+                <p className="mt-1 font-mono text-[11px] text-muted">{dimension.key}</p>
+                <p className="mt-3 text-xs leading-5 text-muted">{dimension.members.map((member) => member.label).join(" · ")}</p>
+              </article>
+            ))}
+          </div>
+        )}
+        <details className="mt-5 border-t border-line pt-4">
+          <summary className="cursor-pointer text-sm font-semibold text-teal-deep">Create a dimension</summary>
+          <form action={createGovernedDimensionAction} className="mt-4 grid gap-4 sm:grid-cols-2">
+            <label className="text-sm font-semibold text-ink">Name<input name="dimensionName" required maxLength={120} placeholder="Customer segment" className="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm" /></label>
+            <label className="text-sm font-semibold text-ink">Key<input name="dimensionKey" required pattern="[a-z][a-z0-9_]*" maxLength={80} placeholder="customer_segment" className="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-sm" /></label>
+            <label className="text-sm font-semibold text-ink">Business type<select name="semanticType" className="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm">{DIMENSION_SEMANTIC_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+            <label className="text-sm font-semibold text-ink">Description<input name="description" maxLength={500} placeholder="How the business groups its customers" className="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm" /></label>
+            <label className="text-sm font-semibold text-ink sm:col-span-2">Members <span className="font-normal text-muted">(one per line: key|Display label)</span><textarea name="members" required rows={4} placeholder={"enterprise|Enterprise\nsmall_business|Small business"} className="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-sm" /></label>
+            <div className="sm:col-span-2"><button className="rounded-lg bg-teal-deep px-4 py-2.5 text-sm font-semibold text-white">Publish dimension</button></div>
+          </form>
+        </details>
+      </section>
 
       {catalogue.length === 0 ? (
         <section className="mt-6 rounded-xl border border-dashed border-line bg-panel p-6 sm:p-8">
@@ -103,7 +141,7 @@ export default async function KpiCataloguePage() {
                 <div className="mt-5 border-t border-line pt-4">
                   <details>
                     <summary className="cursor-pointer text-sm font-semibold text-teal-deep">Edit complete draft contract</summary>
-                    <KpiDefinitionForm action={updateKpiDraftAction} datasets={datasets} definition={entry} />
+                    <KpiDefinitionForm action={updateKpiDraftAction} datasets={datasets} dimensions={dimensions} definition={entry} />
                   </details>
                   {ctx.role === "company_admin" ? (
                     <div className="mt-4 flex flex-wrap gap-3">

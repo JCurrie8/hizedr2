@@ -45,6 +45,27 @@ for (const tenant of demoTenants) {
     throw new Error(`${tenant.slug} KPI catalogue did not resolve to its ${tenant.kpis.length} isolated definitions.`);
   }
 
+  const visibleDimensions = await withUserContext(
+    { userId: tenant.seedPrincipal.profileId, tenantId: tenant.id },
+    async (client) => (
+      await client.query("select id, tenant_id from public.governed_dimensions where status = 'published'")
+    ).rows,
+  );
+  if (visibleDimensions.length !== tenant.dimensions.length || visibleDimensions.some((dimension) => dimension.tenant_id !== tenant.id)) {
+    throw new Error(`${tenant.slug} dimension catalogue did not resolve to its ${tenant.dimensions.length} isolated dimensions.`);
+  }
+
+  const visibleSlices = await withUserContext(
+    { userId: tenant.seedPrincipal.profileId, tenantId: tenant.id },
+    async (client) => (
+      await client.query("select id from public.kpi_values where dimension_slice <> '{}'::jsonb")
+    ).rows,
+  );
+  const expectedSlices = tenant.kpis.reduce((count, kpi) => count + kpi.dimensionValues.length, 0);
+  if (visibleSlices.length !== expectedSlices) {
+    throw new Error(`${tenant.slug} exposed ${visibleSlices.length} dimensional KPI slices instead of ${expectedSlices}.`);
+  }
+
   const other = demoTenants.find((candidate) => candidate.id !== tenant.id);
   const crossTenantNodes = await withUserContext(
     { userId: tenant.seedPrincipal.profileId, tenantId: other.id },
@@ -54,5 +75,5 @@ for (const tenant of demoTenants) {
     throw new Error(`${tenant.slug} seed principal can read ${other.slug} hierarchy rows.`);
   }
 
-  console.log(`ok ${tenant.slug}: one tenant, ${visibleNodes.length} own nodes, ${visibleKpis.length} own KPIs, zero cross-tenant nodes`);
+  console.log(`ok ${tenant.slug}: one tenant, ${visibleNodes.length} own nodes, ${visibleKpis.length} own KPIs, ${visibleDimensions.length} governed dimensions, ${visibleSlices.length} slices, zero cross-tenant nodes`);
 }

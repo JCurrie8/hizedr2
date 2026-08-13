@@ -1,5 +1,5 @@
 import type { AppRole } from "@hized/contracts";
-import type { GovernedDatasetOption } from "@/server/domains/pulse/kpi-governance";
+import type { GovernedDatasetOption, GovernedDimensionOption } from "@/server/domains/pulse/kpi-governance";
 import { KPI_AGGREGATIONS, KPI_NODE_TYPES, KPI_TARGET_METHODS } from "@/server/domains/pulse/kpi-governance";
 import type { KpiCatalogueEntry } from "@/server/domains/pulse/kpis";
 
@@ -18,14 +18,17 @@ const labelClass = "text-sm font-semibold text-ink";
 export function KpiDefinitionForm({
   action,
   datasets,
+  dimensions,
   definition,
 }: {
   action: (formData: FormData) => Promise<void>;
   datasets: GovernedDatasetOption[];
+  dimensions: GovernedDimensionOption[];
   definition?: KpiCatalogueEntry;
 }) {
   const selectedNodes = new Set(definition?.applicableNodeTypes ?? KPI_NODE_TYPES);
   const selectedRoles = new Set<AppRole>(definition?.audienceRoles ?? roles.map((role) => role.value));
+  const selectedDimensions = new Set(definition?.permittedDimensions ?? []);
   return (
     <form action={action} className="mt-5 grid gap-5 border-t border-line pt-5 sm:grid-cols-2">
       {definition ? <input type="hidden" name="definitionId" value={definition.id} /> : null}
@@ -88,9 +91,19 @@ export function KpiDefinitionForm({
       <label className={labelClass}>Refresh cadence
         <input name="refreshCadence" required defaultValue={definition?.refreshCadence} placeholder="Daily by 07:00" className={inputClass} />
       </label>
-      <label className={labelClass}>Permitted dimensions <span className="font-normal text-muted">(comma separated)</span>
-        <input name="permittedDimensions" defaultValue={definition?.permittedDimensions.join(", ")} placeholder="date, region, team" className={inputClass} />
-      </label>
+      <fieldset>
+        <legend className={labelClass}>Permitted dimensions</legend>
+        {dimensions.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-3">
+            {dimensions.map((dimension) => (
+              <label key={dimension.id} className="flex items-center gap-2 text-sm text-ink">
+                <input type="checkbox" name="permittedDimensions" value={dimension.key} defaultChecked={selectedDimensions.has(dimension.key)} />
+                {dimension.name}
+              </label>
+            ))}
+          </div>
+        ) : <p className="mt-2 text-xs font-normal text-muted">Create a governed dimension below before adding filters to this KPI.</p>}
+      </fieldset>
       <fieldset className="sm:col-span-2">
         <legend className={labelClass}>Applicable organisation levels</legend>
         <div className="mt-2 flex flex-wrap gap-3">

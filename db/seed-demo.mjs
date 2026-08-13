@@ -128,6 +128,44 @@ async function upsertTenant(client, tenant, target) {
     );
   }
 
+  for (const dimension of tenant.dimensions) {
+    await client.query(
+      `insert into public.governed_dimensions
+         (id, tenant_id, dimension_key, name, description, semantic_type,
+          status, created_by, updated_by)
+       values ($1, $2, $3, $4, $5, $6, 'published', $7, $7)
+       on conflict (id) do update set
+         name = excluded.name,
+         description = excluded.description,
+         semantic_type = excluded.semantic_type,
+         status = excluded.status,
+         updated_by = excluded.updated_by,
+         updated_at = now()`,
+      [
+        dimension.id,
+        tenant.id,
+        dimension.key,
+        dimension.name,
+        dimension.description,
+        dimension.semanticType,
+        tenant.seedPrincipal.profileId,
+      ],
+    );
+    for (const [memberIndex, member] of dimension.members.entries()) {
+      await client.query(
+        `insert into public.governed_dimension_members
+           (id, tenant_id, dimension_id, member_key, label, sort_order, is_active)
+         values ($1, $2, $3, $4, $5, $6, true)
+         on conflict (id) do update set
+           label = excluded.label,
+           sort_order = excluded.sort_order,
+           is_active = true,
+           updated_at = now()`,
+        [member.id, tenant.id, dimension.id, member.key, member.label, memberIndex],
+      );
+    }
+  }
+
   const datasetsById = new Map(tenant.datasets.map((dataset) => [dataset.id, dataset]));
   for (const kpi of tenant.kpis) {
     const dataset = datasetsById.get(kpi.datasetId);
@@ -162,6 +200,24 @@ async function upsertTenant(client, tenant, target) {
       ],
     );
 
+    await client.query(
+      `update public.kpi_definitions
+          set permitted_dimensions = $3::text[]
+        where tenant_id = $1 and id = $2`,
+      [tenant.id, kpi.id, kpi.dimensions.map((dimension) => dimension.key)],
+    );
+    for (const dimension of kpi.dimensions) {
+      await client.query(
+        `insert into public.kpi_definition_dimensions
+           (tenant_id, kpi_definition_id, dimension_id, is_filterable, is_drillable)
+         values ($1, $2, $3, true, true)
+         on conflict (tenant_id, kpi_definition_id, dimension_id) do update set
+           is_filterable = true,
+           is_drillable = true`,
+        [tenant.id, kpi.id, dimension.id],
+      );
+    }
+
     for (const value of kpi.values) {
       await client.query(
         `insert into public.kpi_values
@@ -183,6 +239,40 @@ async function upsertTenant(client, tenant, target) {
           value.denominator ?? null,
           dataset.sourceAge,
           tenant.seedPrincipal.profileId,
+        ],
+      );
+    }
+
+    for (const value of kpi.dimensionValues) {
+      await client.query(
+        `insert into public.kpi_values
+           (id, tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
+            actual_value, target_value, prior_period_value, numerator_value,
+            denominator_value, source_refreshed_at, calculated_by, dimension_slice)
+         values ($1, $2, $3, $4, current_date - 7, current_date, $5, $6, $7,
+                 $8, $9, now() - $10::interval, $11, $12::jsonb)
+         on conflict (id) do update set
+           actual_value = excluded.actual_value,
+           target_value = excluded.target_value,
+           prior_period_value = excluded.prior_period_value,
+           numerator_value = excluded.numerator_value,
+           denominator_value = excluded.denominator_value,
+           source_refreshed_at = excluded.source_refreshed_at,
+           calculated_by = excluded.calculated_by,
+           dimension_slice = excluded.dimension_slice`,
+        [
+          value.id,
+          tenant.id,
+          kpi.id,
+          value.orgNodeId,
+          value.actual,
+          value.target,
+          value.prior,
+          value.numerator ?? null,
+          value.denominator ?? null,
+          dataset.sourceAge,
+          tenant.seedPrincipal.profileId,
+          JSON.stringify(value.dimensionSlice),
         ],
       );
     }

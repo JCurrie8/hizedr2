@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.4 |
+| Document status | Build-ready product definition — Version 2.5 |
 
 ### Changes since v1.0
 
@@ -97,6 +97,12 @@ This specification is designed to be handed to an AI software builder, technical
 - **A broad initial visual catalogue is explicit.** The first renderer covers KPI, line, area, column, horizontal bar, target-attainment, donut, gauge, funnel, heatmap, exact table, text, line-and-column, waterfall, treemap, radar, scatter and bullet visuals. Visual choice is constrained by semantic compatibility so catalogue breadth does not create misleading analysis.
 - **Sharing never transfers data authority.** Pulse templates and Canvas boards resolve under the current viewer's tenant, membership, role, organisation scope and approved KPI access on every render. Named-user, role, organisation-area and whole-tenant grants may control access to a board, but are additional to—not substitutes for—underlying data permissions.
 - **Geospatial views require governed geography.** Maps remain an MVP requirement, but are enabled only after the governed dimension model supplies validated geographic identifiers or coordinates. Hized must not infer locations from labels or plot arbitrary organisation positions merely to claim map support.
+
+### Changes since v2.4
+
+- **Dimensions are governed reusable business concepts.** Company Admins and Analysts publish tenant-wide product, customer, geography, organisation or custom dimensions with controlled member keys and display labels, then explicitly link compatible dimensions to each KPI definition. A KPI slice using an unlinked dimension, retired member or arbitrary query value must fail closed.
+- **Global filter compatibility is explicit.** The default dashboard result remains the approved unsliced aggregate. Selecting a governed member replaces that aggregate only for KPIs linked to the dimension; unrelated widgets retain their approved total rather than disappearing or mixing differently grained rows.
+- **Record drill-through never opens raw curated storage.** Connect's curated records remain operator-only. Pulse and Canvas may expose a separate projection containing only fields present in the dataset catalogue and marked non-sensitive, and only when that projection is linked to a KPI value the current user can read under tenant, role and organisation RLS. Sensitive projection attempts are rejected; sensitive drill-through actions and all exports remain audited.
 
 ## 1. Product definition and positioning
 
@@ -262,6 +268,8 @@ Every important metric should be represented as a governed KPI definition rather
 - Unit, formatting, favourable direction and threshold bands.
 - Target method: fixed, period-specific, inherited or employee-specific.
 - Permitted dimensions and drill paths.
+
+Company Admins and Analysts manage the reusable governed dimension catalogue alongside KPI definitions. Member keys are stable ETL contracts; labels are the business-facing presentation. Dashboard URLs and client inputs can select only published members that actually have permitted KPI slices in the viewer's current organisation scope.
 - Validity dates, version history and approval status.
 
 ### 4.4 Performance modules
@@ -448,7 +456,9 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 | Pipeline / Run | ETL orchestration | Schedule, steps, watermark, status, counts and errors | PipelineId, RunId |
 | Dataset / Field | Analytical metadata | Curated model, schema, dimensions and measures | DatasetId, FieldId |
 | KPI Definition | Governed metric | Definition, formula, owner, thresholds, dimensions and validity | KpiId |
-| KPI Value | Calculated result | Period, organisation scope, actual, target and comparison | KpiValueId |
+| Governed Dimension / Member | Reusable analytical category | Product, customer, geography, organisation or custom member contract | DimensionId, DimensionMemberId |
+| KPI Value | Calculated result | Period, organisation scope, governed dimension slice, actual, target and comparison | KpiValueId |
+| Governed Record Projection / Lineage | Permission-safe drill-through | Approved non-sensitive source fields linked to readable KPI contributions | ProjectionId, KpiValueId |
 | Dashboard / Widget | Pulse presentation | Layout, filters, visual configuration and access | DashboardId, WidgetId |
 | Canvas Board / Local Field | Self-serve presentation | User-composed layout, personal calculated fields, sharing scope and promotion status | BoardId, LocalFieldId |
 | Alert / Incident | Exception management | Rule, event, severity, deduplication key, acknowledgement, escalation and recovery state | AlertRuleId, IncidentId, AlertEventId |
@@ -466,6 +476,8 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Ratios must be recomputed from numerator and denominator at the selected aggregation level rather than averaged.
 - Slowly changing dimensions or effective dates preserve historical hierarchy and attribute changes.
 - KPI versions must be traceable so a changed definition does not silently rewrite approved historical reports.
+- Dimensional KPI values must reference published dimensions and active governed members explicitly linked to the KPI definition; unsliced totals and sliced values must never be mixed at the same visual grain.
+- Raw curated source JSON remains inside Connect's operator boundary. Record-level analytics uses a separate field-validated projection and inherits the linked KPI value's tenant, role and organisation permission.
 - Hized Canvas may compose new visual layouts and locally scoped calculated fields from governed datasets, but must never redefine an approved KPI definition without going through promotion (section 6.3, CANVAS-005).
 
 ### 8.3 Example KPI contract
