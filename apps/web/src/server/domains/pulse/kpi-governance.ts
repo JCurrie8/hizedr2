@@ -16,6 +16,17 @@ export interface GovernedDatasetOption {
   refreshCadence: string;
 }
 
+export const DIMENSION_SEMANTIC_TYPES = ["product", "customer", "geography", "organisation", "custom"] as const;
+export type DimensionSemanticType = typeof DIMENSION_SEMANTIC_TYPES[number];
+
+export interface GovernedDimensionOption {
+  id: string;
+  key: string;
+  name: string;
+  semanticType: DimensionSemanticType;
+  members: Array<{ key: string; label: string }>;
+}
+
 export interface KpiDraftInput {
   tenantId: string;
   datasetId: string;
@@ -60,6 +71,100 @@ export async function listPublishedDatasetOptions(
   }));
 }
 
+export async function listGovernedDimensionOptions(
+  client: PoolClient,
+  input: { tenantId: string },
+): Promise<GovernedDimensionOption[]> {
+  const { rows } = await client.query(
+    `select dimension.id, dimension.dimension_key, dimension.name, dimension.semantic_type,
+            member.member_key, member.label
+       from public.governed_dimensions dimension
+       left join public.governed_dimension_members member
+         on member.dimension_id = dimension.id
+        and member.tenant_id = dimension.tenant_id
+        and member.is_active
+      where dimension.tenant_id = $1 and dimension.status = 'published'
+      order by dimension.name, member.sort_order, member.label`,
+    [input.tenantId],
+  );
+  const byId = new Map<string, GovernedDimensionOption>();
+  for (const row of rows) {
+    let dimension = byId.get(row.id);
+    if (!dimension) {
+      dimension = {
+        id: row.id,
+        key: row.dimension_key,
+        name: row.name,
+        semanticType: row.semantic_type,
+        members: [],
+      };
+      byId.set(row.id, dimension);
+    }
+    if (row.member_key) dimension.members.push({ key: row.member_key, label: row.label });
+  }
+  return [...byId.values()];
+}
+
+export async function createGovernedDimension(
+  client: PoolClient,
+  input: {
+    tenantId: string;
+    key: string;
+    name: string;
+    description: string;
+    semanticType: DimensionSemanticType;
+    members: Array<{ key: string; label: string }>;
+    actorUserId: string;
+  },
+): Promise<string> {
+  const { rows: [created] } = await client.query(
+    `insert into public.governed_dimensions
+       (tenant_id, dimension_key, name, description, semantic_type, status, created_by, updated_by)
+     values ($1, $2, $3, $4, $5, 'published', $6, $6)
+     returning id`,
+    [input.tenantId, input.key, input.name, input.description, input.semanticType, input.actorUserId],
+  );
+  await client.query(
+    `insert into public.governed_dimension_members
+       (tenant_id, dimension_id, member_key, label, sort_order)
+     select $1, $2, member_key, label, ordinal - 1
+       from unnest($3::text[], $4::text[]) with ordinality as member(member_key, label, ordinal)`,
+    [input.tenantId, created.id, input.members.map((member) => member.key), input.members.map((member) => member.label)],
+  );
+  return created.id;
+}
+
+async function syncKpiDimensionLinks(
+  client: PoolClient,
+  input: { tenantId: string; definitionId: string; dimensionKeys: readonly string[] },
+): Promise<void> {
+  const uniqueKeys = [...new Set(input.dimensionKeys)];
+  const { rows } = uniqueKeys.length === 0 ? { rows: [] } : await client.query(
+    `select id, dimension_key
+       from public.governed_dimensions
+      where tenant_id = $1 and status = 'published' and dimension_key = any($2::text[])`,
+    [input.tenantId, uniqueKeys],
+  );
+  if (rows.length !== uniqueKeys.length) throw new Error("Choose only published governed dimensions.");
+  await client.query(
+    `delete from public.kpi_definition_dimensions
+      where tenant_id = $1 and kpi_definition_id = $2`,
+    [input.tenantId, input.definitionId],
+  );
+  if (rows.length > 0) {
+    await client.query(
+      `insert into public.kpi_definition_dimensions
+         (tenant_id, kpi_definition_id, dimension_id, is_filterable, is_drillable)
+       select $1, $2, selected.id, true, true
+         from unnest($3::uuid[]) with ordinality selected(id, position)
+        order by selected.position`,
+      [input.tenantId, input.definitionId, rows
+        .sort((left, right) => uniqueKeys.indexOf(left.dimension_key) - uniqueKeys.indexOf(right.dimension_key))
+        .map((row) => row.id)],
+    );
+  }
+}
+
 async function lockKpiKey(client: PoolClient, tenantId: string, key: string): Promise<void> {
   await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`${tenantId}:${key}`]);
 }
@@ -93,6 +198,11 @@ export async function createKpiDraft(client: PoolClient, input: KpiDraftInput): 
       input.validFrom, input.createdBy,
     ],
   );
+  await syncKpiDimensionLinks(client, {
+    tenantId: input.tenantId,
+    definitionId: created.id,
+    dimensionKeys: input.permittedDimensions,
+  });
   return { id: created.id, version: nextVersion };
 }
 
@@ -133,6 +243,11 @@ export async function updateKpiDraft(
     ],
   );
   if (result.rowCount !== 1) throw new Error("KPI draft not found or no longer editable.");
+  await syncKpiDimensionLinks(client, {
+    tenantId: input.tenantId,
+    definitionId: input.definitionId,
+    dimensionKeys: input.permittedDimensions,
+  });
 }
 
 export async function createNextKpiVersion(

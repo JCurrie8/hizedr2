@@ -607,6 +607,183 @@ describe("RLS tenant isolation", () => {
     }
   });
 
+  it("governed dimensions stay pinned to the selected tenant even for a multi-tenant user", async () => {
+    const { rows: [dimensionA] } = await admin.query(
+      `insert into public.governed_dimensions
+         (tenant_id, dimension_key, name, semantic_type, status, created_by, updated_by)
+       values ($1, 'rls_customer_a', 'Customer A', 'customer', 'published', $2, $2)
+       returning id`,
+      [tenantA.tenantId, tenantA.profileId],
+    );
+    const { rows: [dimensionB] } = await admin.query(
+      `insert into public.governed_dimensions
+         (tenant_id, dimension_key, name, semantic_type, status, created_by, updated_by)
+       values ($1, 'rls_customer_b', 'Customer B', 'customer', 'published', $2, $2)
+       returning id`,
+      [tenantB.tenantId, tenantB.profileId],
+    );
+    await admin.query(
+      "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'company_admin', 'active')",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    try {
+      const visible = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query(
+          "select id, tenant_id from public.governed_dimensions where id = any($1::uuid[])",
+          [[dimensionA.id, dimensionB.id]],
+        ).then((result) => result.rows),
+      );
+      expect(visible).toEqual([{ id: dimensionA.id, tenant_id: tenantA.tenantId }]);
+
+      const changed = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query(
+          "update public.governed_dimensions set name = 'Cross-tenant change', updated_by = $1 where id = $2",
+          [tenantA.profileId, dimensionB.id],
+        ).then((result) => result.rowCount),
+      );
+      expect(changed).toBe(0);
+    } finally {
+      await admin.query(
+        "delete from public.tenant_memberships where tenant_id = $1 and user_id = $2",
+        [tenantB.tenantId, tenantA.profileId],
+      );
+    }
+  });
+
+  it("exposes only non-sensitive source projections linked to a permitted KPI value", async () => {
+    async function createLineageFixture(
+      tenant: TenantFixture,
+      connectorId: string,
+      pipelineId: string,
+      suffix: string,
+    ) {
+      const { rows: [batch] } = await admin.query(
+        `insert into public.source_batches
+           (tenant_id, connector_id, batch_kind, source_item_id, source_name,
+            content_sha256, content_type, size_bytes, storage_key)
+         values ($1, $2, 'api_extract', $3, $4, $5,
+                 'application/x-ndjson', 10, $6) returning id`,
+        [tenant.tenantId, connectorId, `lineage-${suffix}`, `Lineage ${suffix}`, suffix.repeat(64), `test/lineage-${suffix}.ndjson`],
+      );
+      const { rows: [run] } = await admin.query(
+        `insert into public.pipeline_runs
+           (tenant_id, pipeline_id, connector_id, source_batch_id, trigger_type,
+            status, started_at, finished_at, rows_received, rows_accepted)
+         values ($1, $2, $3, $4, 'manual_sync', 'succeeded', now(), now(), 1, 1)
+         returning id`,
+        [tenant.tenantId, pipelineId, connectorId, batch.id],
+      );
+      const { rows: [record] } = await admin.query(
+        `insert into public.curated_records
+           (tenant_id, pipeline_id, record_key, data, source_run_id, source_row_number)
+         values ($1, $2, $3, $4::jsonb, $5, 1) returning id`,
+        [tenant.tenantId, pipelineId, `record-${suffix}`, JSON.stringify({ reference: `REF-${suffix}`, customer_email: `${suffix}@secret.test` }), run.id],
+      );
+      const { rows: [node] } = await admin.query(
+        `insert into public.org_nodes (tenant_id, node_type) values ($1, 'company') returning id`,
+        [tenant.tenantId],
+      );
+      await admin.query(
+        `insert into public.org_node_versions
+           (org_node_id, tenant_id, name, path, valid_from)
+         values ($1, $2, $3, $4::ltree, current_date)`,
+        [node.id, tenant.tenantId, `Lineage ${suffix}`, node.id.replaceAll("-", "_")],
+      );
+      const { rows: [dataset] } = await admin.query(
+        `insert into public.governed_datasets
+           (tenant_id, dataset_key, name, subject_area, status, source_pipeline_id,
+            refresh_cadence, expected_latency, created_by, updated_by)
+         values ($1, $2, $3, 'Test', 'published', $4, 'Daily', interval '1 day', $5, $5)
+         returning id`,
+        [tenant.tenantId, `lineage_${suffix}`, `Lineage ${suffix}`, pipelineId, tenant.profileId],
+      );
+      await admin.query(
+        `insert into public.governed_dataset_fields
+           (tenant_id, dataset_id, field_key, name, data_type, field_role, is_sensitive)
+         values ($1, $2, 'reference', 'Reference', 'text', 'identifier', false),
+                ($1, $2, 'customer_email', 'Customer email', 'text', 'dimension', true)`,
+        [tenant.tenantId, dataset.id],
+      );
+      const { rows: [definition] } = await admin.query(
+        `insert into public.kpi_definitions
+           (tenant_id, dataset_id, kpi_key, version_number, name, definition,
+            formula_reference, owner_name, reviewer_name, unit, favourable_direction,
+            aggregation, refresh_cadence, valid_from, approval_status, approved_by,
+            approved_at, created_by)
+         values ($1, $2, $3, 1, $4, 'Lineage test KPI.', 'count(reference)',
+                 'Test owner', 'Test reviewer', 'number', 'higher', 'sum', 'Daily',
+                 current_date, 'approved', $5, now(), $5) returning id`,
+        [tenant.tenantId, dataset.id, `lineage_${suffix}`, `Lineage ${suffix}`, tenant.profileId],
+      );
+      const { rows: [value] } = await admin.query(
+        `insert into public.kpi_values
+           (tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
+            actual_value, source_refreshed_at, calculated_by)
+         values ($1, $2, $3, current_date - 1, current_date, 1, now(), $4)
+         returning id`,
+        [tenant.tenantId, definition.id, node.id, tenant.profileId],
+      );
+      const { rows: [projection] } = await admin.query(
+        `insert into public.governed_record_projections
+           (tenant_id, dataset_id, source_record_id, org_node_id, display_data, source_refreshed_at)
+         values ($1, $2, $3, $4, $5::jsonb, now()) returning id`,
+        [tenant.tenantId, dataset.id, record.id, node.id, JSON.stringify({ reference: `REF-${suffix}` })],
+      );
+      await admin.query(
+        `insert into public.kpi_value_record_lineage (tenant_id, kpi_value_id, projection_id)
+         values ($1, $2, $3)`,
+        [tenant.tenantId, value.id, projection.id],
+      );
+      return { datasetId: dataset.id, recordId: record.id, nodeId: node.id, projectionId: projection.id };
+    }
+
+    const lineageA = await createLineageFixture(tenantA, connectorAId, pipelineAId, "c");
+    const lineageB = await createLineageFixture(tenantB, connectorBId, pipelineBId, "d");
+    await admin.query(
+      "insert into public.tenant_memberships (tenant_id, user_id, role, status) values ($1, $2, 'company_admin', 'active')",
+      [tenantB.tenantId, tenantA.profileId],
+    );
+    try {
+      const visible = await withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query(
+          "select id, display_data from public.governed_record_projections where id = any($1::uuid[])",
+          [[lineageA.projectionId, lineageB.projectionId]],
+        ).then((result) => result.rows),
+      );
+      expect(visible).toEqual([{ id: lineageA.projectionId, display_data: { reference: "REF-c" } }]);
+
+      await expect(withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query(
+          `insert into public.governed_record_projections
+             (tenant_id, dataset_id, source_record_id, org_node_id, display_data, source_refreshed_at)
+           values ($1, $2, $3, $4, '{"customer_email":"leak@test.invalid"}'::jsonb, now())`,
+          [tenantA.tenantId, lineageA.datasetId, lineageA.recordId, lineageA.nodeId],
+        ),
+      )).rejects.toThrow(/unknown, sensitive, or incorrectly typed field/);
+
+      await expect(withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query(
+          `insert into public.governed_record_projections
+             (tenant_id, dataset_id, source_record_id, org_node_id, display_data, source_refreshed_at)
+           values ($1, $2, $3, $4,
+                   '{"reference":{"customer_email":"nested-leak@test.invalid"}}'::jsonb,
+                   now())`,
+          [tenantA.tenantId, lineageA.datasetId, lineageA.recordId, lineageA.nodeId],
+        ),
+      )).rejects.toThrow(/unknown, sensitive, or incorrectly typed field/);
+    } finally {
+      await admin.query(
+        "delete from public.tenant_memberships where tenant_id = $1 and user_id = $2",
+        [tenantB.tenantId, tenantA.profileId],
+      );
+    }
+  });
+
   it("lets an Analyst draft a KPI but requires Company Admin approval", async () => {
     const { rows: [dataset] } = await admin.query(
       `insert into public.governed_datasets

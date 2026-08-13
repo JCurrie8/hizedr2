@@ -8,8 +8,10 @@ import { isAppRole } from "@/server/domains/access-control/membership-access";
 import { assertProductAccess } from "@/server/domains/products/entitlements";
 import {
   approveKpiDraft,
+  createGovernedDimension,
   createKpiDraft,
   createNextKpiVersion,
+  DIMENSION_SEMANTIC_TYPES,
   KPI_AGGREGATIONS,
   KPI_NODE_TYPES,
   KPI_TARGET_METHODS,
@@ -42,10 +44,6 @@ function requiredText(formData: FormData, name: string, label: string, max: numb
   const value = String(formData.get(name) ?? "").trim();
   if (!value || value.length > max) throw new Error(`${label} is required and must be ${max} characters or fewer.`);
   return value;
-}
-
-function parseStringList(value: FormDataEntryValue | null): string[] {
-  return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function parseDraftForm(formData: FormData) {
@@ -100,11 +98,58 @@ function parseDraftForm(formData: FormData) {
     refreshCadence: requiredText(formData, "refreshCadence", "Refresh cadence", 120),
     thresholds,
     targetMethod,
-    permittedDimensions: parseStringList(formData.get("permittedDimensions")),
+    permittedDimensions: formData.getAll("permittedDimensions").map(String),
     applicableNodeTypes,
     audienceRoles,
     validFrom,
   };
+}
+
+export async function createGovernedDimensionAction(formData: FormData): Promise<void> {
+  const ctx = await requireKpiGovernor();
+  const key = requiredText(formData, "dimensionKey", "Dimension key", 80);
+  if (!KEY_PATTERN.test(key)) throw new Error("Dimension key must use lowercase letters, numbers and underscores.");
+  const semanticType = String(formData.get("semanticType") ?? "");
+  if (!DIMENSION_SEMANTIC_TYPES.includes(semanticType as never)) throw new Error("Choose a valid dimension type.");
+  const members = String(formData.get("members") ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [memberKey, ...labelParts] = line.split("|");
+      const label = labelParts.join("|").trim();
+      if (!memberKey || !KEY_PATTERN.test(memberKey.trim()) || !label || label.length > 160) {
+        throw new Error("Each member must use the format member_key|Display label.");
+      }
+      return { key: memberKey.trim(), label };
+    });
+  if (members.length === 0 || members.length > 250) throw new Error("Add between 1 and 250 dimension members.");
+  if (new Set(members.map((member) => member.key)).size !== members.length) throw new Error("Dimension member keys must be unique.");
+  const name = requiredText(formData, "dimensionName", "Dimension name", 120);
+  const description = String(formData.get("description") ?? "").trim();
+  if (description.length > 500) throw new Error("Dimension description must be 500 characters or fewer.");
+
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    const dimensionId = await createGovernedDimension(client, {
+      tenantId: ctx.tenant.id,
+      key,
+      name,
+      description,
+      semanticType: semanticType as (typeof DIMENSION_SEMANTIC_TYPES)[number],
+      members,
+      actorUserId: ctx.profileId,
+    });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "dimension.published",
+      targetType: "governed_dimension",
+      targetId: dimensionId,
+      metadata: { key, semanticType, memberCount: members.length },
+    });
+  });
+  revalidatePath("/admin/kpis");
+  revalidatePath("/dashboard");
 }
 
 export async function createKpiDraftAction(formData: FormData): Promise<void> {

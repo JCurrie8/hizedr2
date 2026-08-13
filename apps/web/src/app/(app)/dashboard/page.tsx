@@ -99,7 +99,7 @@ function TrendSparkline({ kpi }: { kpi: PulseKpiCard }) {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string; periods?: string }>;
+  searchParams: Promise<{ org?: string; periods?: string; dimension?: string; member?: string }>;
 }) {
   const ctx = await getAuthContextFromRequest();
   if (ctx.kind !== "tenant") return null; // layout already redirects/handles other cases
@@ -124,6 +124,8 @@ export default async function DashboardPage({
               viewId: defaultView.id,
               requestedOrgNodeId,
               reportingPeriods,
+              requestedDimensionKey: search.dimension,
+              requestedMemberKey: search.member,
             })
           : null;
         return { snapshot, configuredView };
@@ -139,10 +141,21 @@ export default async function DashboardPage({
   const connect = snapshot.connect;
   const kpis = snapshot.kpis;
   const hierarchy = snapshot.hierarchy;
-  const dashboardHref = (orgNodeId: string | null, periods = reportingPeriods) => {
+  const activeDimensionKey = configuredView?.filterContext.activeDimensionKey ?? null;
+  const activeMemberKey = configuredView?.filterContext.activeMemberKey ?? null;
+  const dashboardHref = (
+    orgNodeId: string | null,
+    periods = reportingPeriods,
+    dimensionKey: string | null = activeDimensionKey,
+    memberKey: string | null = activeMemberKey,
+  ) => {
     const query = new URLSearchParams();
     if (orgNodeId) query.set("org", orgNodeId);
     if (periods !== 12) query.set("periods", String(periods));
+    if (dimensionKey && memberKey) {
+      query.set("dimension", dimensionKey);
+      query.set("member", memberKey);
+    }
     const suffix = query.size > 0 ? `?${query.toString()}` : "";
     return tenantHref(`/dashboard${suffix}`);
   };
@@ -242,8 +255,8 @@ export default async function DashboardPage({
                   Applies to every compatible visual. Organisation is already scoped to {hierarchy?.selected.name ?? "your permitted area"}.
                 </p>
               </div>
-              {(reportingPeriods !== 12 || requestedOrgNodeId) && (
-                <Link href={dashboardHref(null, 12)} className="text-sm font-semibold text-teal-deep hover:underline">
+              {(reportingPeriods !== 12 || requestedOrgNodeId || activeDimensionKey) && (
+                <Link href={dashboardHref(null, 12, null, null)} className="text-sm font-semibold text-teal-deep hover:underline">
                   Reset filters
                 </Link>
               )}
@@ -264,6 +277,28 @@ export default async function DashboardPage({
                 );
               })}
             </div>
+            {configuredView.filterContext.dimensions.map((dimension) => (
+              <div key={dimension.key} className="mt-4 border-t border-line pt-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">{dimension.name}</p>
+                <div className="mt-2 flex flex-wrap gap-2" aria-label={`${dimension.name} filter`}>
+                  {dimension.members.map((member) => {
+                    const active = activeDimensionKey === dimension.key && activeMemberKey === member.key;
+                    return (
+                      <Link
+                        key={member.key}
+                        href={active
+                          ? dashboardHref(hierarchy?.selected.id ?? null, reportingPeriods, null, null)
+                          : dashboardHref(hierarchy?.selected.id ?? null, reportingPeriods, dimension.key, member.key)}
+                        aria-current={active ? "true" : undefined}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${active ? "border-teal-deep bg-teal-deep text-white" : "border-line bg-canvas text-ink hover:border-teal"}`}
+                      >
+                        {member.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
           <AnalyticsViewRenderer runtime={configuredView} />
         </section>

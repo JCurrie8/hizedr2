@@ -4,8 +4,10 @@ import { withUserContext } from "@hized/db";
 import { cleanupFixture, createTenantWithUser, type TenantFixture } from "@hized/testing";
 import {
   approveKpiDraft,
+  createGovernedDimension,
   createKpiDraft,
   createNextKpiVersion,
+  listGovernedDimensionOptions,
   listPublishedDatasetOptions,
 } from "./kpi-governance";
 
@@ -55,6 +57,13 @@ describe("governed KPI authoring and approval", () => {
       [fixture.tenantId, fixture.profileId],
     );
     datasetId = dataset.id;
+    await admin.query(
+      `insert into public.governed_dimensions
+         (tenant_id, dimension_key, name, semantic_type, status, created_by, updated_by)
+       values ($1, 'region', 'Region', 'geography', 'published', $2, $2),
+              ($1, 'team', 'Team', 'organisation', 'published', $2, $2)`,
+      [fixture.tenantId, fixture.profileId],
+    );
 
     const { rows: [authUser] } = await admin.query(
       `insert into "user" (id, name, email, "emailVerified")
@@ -87,6 +96,36 @@ describe("governed KPI authoring and approval", () => {
       (client) => listPublishedDatasetOptions(client, { tenantId: fixture.tenantId }),
     );
     expect(datasets).toEqual([{ id: datasetId, name: "Operations", subjectArea: "Operations", refreshCadence: "Daily" }]);
+  });
+
+  it("lets an Analyst publish a reusable governed dimension and members", async () => {
+    await withUserContext(
+      { userId: analyst.profileId, tenantId: fixture.tenantId },
+      (client) => createGovernedDimension(client, {
+        tenantId: fixture.tenantId,
+        key: "customer_segment",
+        name: "Customer segment",
+        description: "Reusable customer grouping.",
+        semanticType: "customer",
+        members: [
+          { key: "enterprise", label: "Enterprise" },
+          { key: "small_business", label: "Small business" },
+        ],
+        actorUserId: analyst.profileId,
+      }),
+    );
+    const dimensions = await withUserContext(
+      { userId: analyst.profileId, tenantId: fixture.tenantId },
+      (client) => listGovernedDimensionOptions(client, { tenantId: fixture.tenantId }),
+    );
+    expect(dimensions).toContainEqual(expect.objectContaining({
+      key: "customer_segment",
+      semanticType: "customer",
+      members: [
+        { key: "enterprise", label: "Enterprise" },
+        { key: "small_business", label: "Small business" },
+      ],
+    }));
   });
 
   it("publishes a Company Admin draft", async () => {

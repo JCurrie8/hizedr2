@@ -45,7 +45,7 @@ Only invitation hashes are persisted. Copy each displayed link when it is create
 - `northstar-installations`: an installation and service business with company, regional, site, team, employee, sales, customer-service, and finance nodes.
 - `harbour-field-services`: a smaller second business with its own company-to-employee path, used as the cross-tenant control.
 
-Both tenants carry `feature_flags.demoSeed = "phase0-v1"`, use deterministic IDs, and receive a `demo.seeded` audit event on each successful seed run.
+Both tenants carry the current `feature_flags.demoSeed` manifest version, use deterministic IDs, and receive a `demo.seeded` audit event on each successful seed run. As product epics land, the same stable tenants are extended with governed datasets, KPI definitions, dimension members, dimensional KPI slices and saved Pulse/Canvas views rather than replaced by disconnected examples.
 
 ## EPIC-01 walkthrough
 

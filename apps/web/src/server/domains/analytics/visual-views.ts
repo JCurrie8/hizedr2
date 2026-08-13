@@ -108,6 +108,7 @@ export interface AnalyticsViewDetail extends AnalyticsViewSummary {
 }
 
 export interface AnalyticsValuePoint {
+  valueId: string;
   metricId: string;
   metricName: string;
   organisationId: string;
@@ -121,12 +122,22 @@ export interface AnalyticsValuePoint {
   expectedLatencySeconds: number;
 }
 
+export interface AnalyticsDimensionOption {
+  key: string;
+  name: string;
+  semanticType: "product" | "customer" | "geography" | "organisation" | "custom";
+  members: Array<{ key: string; label: string }>;
+}
+
 export interface AnalyticsViewRuntime {
   view: AnalyticsViewDetail;
   hierarchy: PulseHierarchy | null;
   values: AnalyticsValuePoint[];
   filterContext: {
     reportingPeriods: AnalyticsReportingPeriods;
+    dimensions: AnalyticsDimensionOption[];
+    activeDimensionKey: string | null;
+    activeMemberKey: string | null;
   };
 }
 
@@ -900,6 +911,8 @@ export async function loadAnalyticsViewRuntime(
     viewId: string;
     requestedOrgNodeId?: string | null;
     reportingPeriods?: AnalyticsReportingPeriods;
+    requestedDimensionKey?: string | null;
+    requestedMemberKey?: string | null;
   },
 ): Promise<AnalyticsViewRuntime | null> {
   const view = await getAnalyticsView(client, { tenantId: input.tenantId, viewId: input.viewId });
@@ -914,12 +927,69 @@ export async function loadAnalyticsViewRuntime(
     : [];
   const reportingPeriods = input.reportingPeriods ?? 12;
   if (metricIds.length === 0 || organisationIds.length === 0) {
-    return { view, hierarchy, values: [], filterContext: { reportingPeriods } };
+    return {
+      view,
+      hierarchy,
+      values: [],
+      filterContext: {
+        reportingPeriods,
+        dimensions: [],
+        activeDimensionKey: null,
+        activeMemberKey: null,
+      },
+    };
   }
+
+  const { rows: dimensionRows } = await client.query(
+    `select distinct dimension.dimension_key, dimension.name, dimension.semantic_type,
+            member.member_key, member.label, member.sort_order
+       from public.kpi_definition_dimensions link
+       join public.governed_dimensions dimension
+         on dimension.id = link.dimension_id and dimension.tenant_id = link.tenant_id
+       join public.governed_dimension_members member
+         on member.dimension_id = dimension.id and member.tenant_id = dimension.tenant_id
+      where link.tenant_id = $1
+        and link.kpi_definition_id = any($2::uuid[])
+        and link.is_filterable
+        and dimension.status = 'published'
+        and member.is_active
+        and exists (
+          select 1
+            from public.kpi_values available_value
+           where available_value.tenant_id = link.tenant_id
+             and available_value.kpi_definition_id = link.kpi_definition_id
+             and available_value.org_node_id = any($3::uuid[])
+             and available_value.dimension_slice =
+               jsonb_build_object(dimension.dimension_key, member.member_key)
+        )
+      order by dimension.name, dimension.dimension_key, member.sort_order, member.label`,
+    [input.tenantId, metricIds, organisationIds],
+  );
+  const dimensionsByKey = new Map<string, AnalyticsDimensionOption>();
+  for (const row of dimensionRows) {
+    let dimension = dimensionsByKey.get(row.dimension_key);
+    if (!dimension) {
+      dimension = {
+        key: row.dimension_key,
+        name: row.name,
+        semanticType: row.semantic_type,
+        members: [],
+      };
+      dimensionsByKey.set(row.dimension_key, dimension);
+    }
+    if (!dimension.members.some((member) => member.key === row.member_key)) {
+      dimension.members.push({ key: row.member_key, label: row.label });
+    }
+  }
+  const dimensions = [...dimensionsByKey.values()];
+  const requestedDimension = dimensions.find((dimension) => dimension.key === input.requestedDimensionKey);
+  const requestedMember = requestedDimension?.members.find((member) => member.key === input.requestedMemberKey);
+  const activeDimensionKey = requestedDimension && requestedMember ? requestedDimension.key : null;
+  const activeMemberKey = requestedDimension && requestedMember ? requestedMember.key : null;
 
   const { rows } = await client.query(
     `with ranked as (
-       select value.kpi_definition_id, definition.name as metric_name,
+       select value.id as value_id, value.kpi_definition_id, definition.name as metric_name,
               value.org_node_id, version.name as organisation_name,
               value.period_start::text as period_start,
               value.period_end::text as period_end,
@@ -943,16 +1013,53 @@ export async function loadAnalyticsViewRuntime(
           and value.kpi_definition_id = any($2::uuid[])
           and value.org_node_id = any($3::uuid[])
           and definition.approval_status = 'approved'
+          and (
+            ($5::text is null and value.dimension_slice = '{}'::jsonb)
+            or (
+              $5::text is not null
+              and (
+                (
+                  exists (
+                    select 1
+                      from public.kpi_definition_dimensions active_link
+                      join public.governed_dimensions active_dimension
+                        on active_dimension.id = active_link.dimension_id
+                       and active_dimension.tenant_id = active_link.tenant_id
+                     where active_link.tenant_id = value.tenant_id
+                       and active_link.kpi_definition_id = value.kpi_definition_id
+                       and active_link.is_filterable
+                       and active_dimension.dimension_key = $5
+                  )
+                  and value.dimension_slice = jsonb_build_object($5::text, $6::text)
+                )
+                or (
+                  not exists (
+                    select 1
+                      from public.kpi_definition_dimensions active_link
+                      join public.governed_dimensions active_dimension
+                        on active_dimension.id = active_link.dimension_id
+                       and active_dimension.tenant_id = active_link.tenant_id
+                     where active_link.tenant_id = value.tenant_id
+                       and active_link.kpi_definition_id = value.kpi_definition_id
+                       and active_link.is_filterable
+                       and active_dimension.dimension_key = $5
+                  )
+                  and value.dimension_slice = '{}'::jsonb
+                )
+              )
+            )
+          )
      )
      select * from ranked where recency_rank <= $4
      order by metric_name, organisation_name, period_end`,
-    [input.tenantId, metricIds, organisationIds, reportingPeriods],
+    [input.tenantId, metricIds, organisationIds, reportingPeriods, activeDimensionKey, activeMemberKey],
   );
   return {
     view,
     hierarchy,
-    filterContext: { reportingPeriods },
+    filterContext: { reportingPeriods, dimensions, activeDimensionKey, activeMemberKey },
     values: rows.map((row) => ({
+      valueId: row.value_id,
       metricId: row.kpi_definition_id,
       metricName: row.metric_name,
       organisationId: row.org_node_id,

@@ -23,17 +23,47 @@ function tenant(number, details) {
     id: stableId(number, 400 + index),
   }));
   const datasetsByKey = new Map(datasets.map((dataset) => [dataset.key, dataset]));
+  const dimensions = (details.dimensions ?? []).map((dimension, dimensionIndex) => ({
+    ...dimension,
+    id: stableId(number, 800 + dimensionIndex),
+    members: dimension.members.map((member, memberIndex) => ({
+      ...member,
+      id: stableId(number, 820 + dimensionIndex * 20 + memberIndex),
+    })),
+  }));
+  const dimensionsByKey = new Map(dimensions.map((dimension) => [dimension.key, dimension]));
   const kpis = (details.kpis ?? []).map((kpi, index) => {
     const dataset = datasetsByKey.get(kpi.datasetKey);
     if (!dataset) throw new Error(`Unknown dataset ${kpi.datasetKey}`);
+    const kpiDimensions = (kpi.dimensionKeys ?? []).map((key) => {
+      const dimension = dimensionsByKey.get(key);
+      if (!dimension) throw new Error(`Unknown KPI dimension ${key}`);
+      return dimension;
+    });
     return {
       ...kpi,
       id: stableId(number, 500 + index),
       datasetId: dataset.id,
+      dimensions: kpiDimensions,
       values: kpi.values.map((value, valueIndex) => {
         const orgNode = byKey.get(value.orgKey);
         if (!orgNode) throw new Error(`Unknown KPI organisation node ${value.orgKey}`);
         return { ...value, id: stableId(number, 600 + index * 20 + valueIndex), orgNodeId: orgNode.id };
+      }),
+      dimensionValues: (kpi.dimensionValues ?? []).map((value, valueIndex) => {
+        const orgNode = byKey.get(value.orgKey);
+        if (!orgNode) throw new Error(`Unknown dimensional KPI organisation node ${value.orgKey}`);
+        const dimension = dimensionsByKey.get(value.dimensionKey);
+        const member = dimension?.members.find((candidate) => candidate.key === value.memberKey);
+        if (!dimension || !member || !kpiDimensions.some((candidate) => candidate.id === dimension.id)) {
+          throw new Error(`Unknown or unlinked KPI dimension member ${value.dimensionKey}/${value.memberKey}`);
+        }
+        return {
+          ...value,
+          id: stableId(number, 860 + index * 20 + valueIndex),
+          orgNodeId: orgNode.id,
+          dimensionSlice: { [dimension.key]: member.key },
+        };
       }),
     };
   });
@@ -91,12 +121,13 @@ function tenant(number, details) {
     },
     nodes,
     datasets,
+    dimensions,
     kpis,
     views,
   };
 }
 
-export const DEMO_SEED_VERSION = "visuals-v1";
+export const DEMO_SEED_VERSION = "governed-dimensions-v1";
 export const DEMO_VALID_FROM = "2026-01-01";
 
 export const demoTenants = [
@@ -135,6 +166,18 @@ export const demoTenants = [
         sourceAge: "3 days",
       },
     ],
+    dimensions: [
+      {
+        key: "installation_type",
+        name: "Installation type",
+        description: "The governed category of installation work.",
+        semanticType: "product",
+        members: [
+          { key: "standard", label: "Standard" },
+          { key: "complex", label: "Complex" },
+        ],
+      },
+    ],
     kpis: [
       {
         key: "first_time_completion",
@@ -150,6 +193,11 @@ export const demoTenants = [
         favourableDirection: "higher",
         aggregation: "ratio",
         thresholds: { green: { gte: 92 }, amber: { gte: 88 } },
+        dimensionKeys: ["installation_type"],
+        dimensionValues: [
+          { orgKey: "company", dimensionKey: "installation_type", memberKey: "standard", actual: 93.1, target: 92, prior: 91.8, numerator: 326, denominator: 350 },
+          { orgKey: "company", dimensionKey: "installation_type", memberKey: "complex", actual: 84.7, target: 92, prior: 83.3, numerator: 127, denominator: 150 },
+        ],
         values: [
           { orgKey: "company", actual: 90.6, target: 92, prior: 89.4, numerator: 453, denominator: 500 },
           { orgKey: "north", actual: 89.8, target: 92, prior: 88.7, numerator: 269.4, denominator: 300 },
@@ -200,6 +248,18 @@ export const demoTenants = [
         sourceAge: "3 hours",
       },
     ],
+    dimensions: [
+      {
+        key: "repair_type",
+        name: "Repair type",
+        description: "The governed category of repair work.",
+        semanticType: "product",
+        members: [
+          { key: "planned", label: "Planned" },
+          { key: "reactive", label: "Reactive" },
+        ],
+      },
+    ],
     kpis: [
       {
         key: "repairs_completed_on_time",
@@ -215,6 +275,11 @@ export const demoTenants = [
         favourableDirection: "higher",
         aggregation: "ratio",
         thresholds: { green: { gte: 95 }, amber: { gte: 90 } },
+        dimensionKeys: ["repair_type"],
+        dimensionValues: [
+          { orgKey: "company", dimensionKey: "repair_type", memberKey: "planned", actual: 98.2, target: 95, prior: 96.4, numerator: 108, denominator: 110 },
+          { orgKey: "company", dimensionKey: "repair_type", memberKey: "reactive", actual: 95.0, target: 95, prior: 93.5, numerator: 133, denominator: 140 },
+        ],
         values: [
           { orgKey: "company", actual: 96.4, target: 95, prior: 94.8, numerator: 241, denominator: 250 },
           { orgKey: "repairs", actual: 96.4, target: 95, prior: 94.8, numerator: 241, denominator: 250 },
@@ -241,7 +306,12 @@ export function validateDemoData() {
       demoTenant.seedPrincipal.membershipId,
       ...demoTenant.nodes.flatMap((node) => [node.id, node.versionId]),
       ...demoTenant.datasets.map((dataset) => dataset.id),
-      ...demoTenant.kpis.flatMap((kpi) => [kpi.id, ...kpi.values.map((value) => value.id)]),
+      ...demoTenant.dimensions.flatMap((dimension) => [dimension.id, ...dimension.members.map((member) => member.id)]),
+      ...demoTenant.kpis.flatMap((kpi) => [
+        kpi.id,
+        ...kpi.values.map((value) => value.id),
+        ...kpi.dimensionValues.map((value) => value.id),
+      ]),
       ...demoTenant.views.flatMap((view) => [view.id, ...view.widgets.map((widget) => widget.id)]),
     ];
     for (const id of tenantIds) {

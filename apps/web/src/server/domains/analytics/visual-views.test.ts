@@ -114,6 +114,37 @@ describe("Canvas sharing and duplication", () => {
          from generate_series(0, 11) as series(period_offset)`,
       [owner.tenantId, metricId, companyNodeId, owner.profileId],
     );
+    const { rows: [dimension] } = await admin.query<{ id: string }>(
+      `insert into public.governed_dimensions
+         (tenant_id, dimension_key, name, semantic_type, status, created_by, updated_by)
+       values ($1, 'customer_segment', 'Customer segment', 'customer', 'published', $2, $2)
+       returning id`,
+      [owner.tenantId, owner.profileId],
+    );
+    await admin.query(
+      `insert into public.governed_dimension_members
+         (tenant_id, dimension_id, member_key, label, sort_order)
+       values ($1, $2, 'enterprise', 'Enterprise', 0),
+              ($1, $2, 'small_business', 'Small business', 1)`,
+      [owner.tenantId, dimension.id],
+    );
+    await admin.query(
+      `insert into public.kpi_definition_dimensions
+         (tenant_id, kpi_definition_id, dimension_id)
+       values ($1, $2, $3)`,
+      [owner.tenantId, metricId, dimension.id],
+    );
+    await admin.query(
+      `insert into public.kpi_values
+         (tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
+          actual_value, target_value, prior_period_value, source_refreshed_at,
+          calculated_by, dimension_slice)
+       values ($1, $2, $3, current_date - 7, current_date, 72, 70, 69, now(), $4,
+               '{"customer_segment":"enterprise"}'::jsonb),
+              ($1, $2, $3, current_date - 7, current_date, 48, 45, 47, now(), $4,
+               '{"customer_segment":"small_business"}'::jsonb)`,
+      [owner.tenantId, metricId, companyNodeId, owner.profileId],
+    );
     const { rows: [adminOnlyMetric] } = await admin.query<{ id: string }>(
       `insert into public.kpi_definitions
          (tenant_id, dataset_id, kpi_key, version_number, name, definition,
@@ -193,7 +224,20 @@ describe("Canvas sharing and duplication", () => {
       }),
     );
 
-    expect(runtime?.filterContext).toEqual({ reportingPeriods: 3 });
+    expect(runtime?.filterContext).toEqual({
+      reportingPeriods: 3,
+      dimensions: [{
+        key: "customer_segment",
+        name: "Customer segment",
+        semanticType: "customer",
+        members: [
+          { key: "enterprise", label: "Enterprise" },
+          { key: "small_business", label: "Small business" },
+        ],
+      }],
+      activeDimensionKey: null,
+      activeMemberKey: null,
+    });
     expect(runtime?.values).toHaveLength(3);
     expect(runtime?.values.map((row) => row.periodEnd)).toEqual(
       [...(runtime?.values ?? [])].map((row) => row.periodEnd).sort(),
@@ -201,6 +245,48 @@ describe("Canvas sharing and duplication", () => {
     expect(parseAnalyticsReportingPeriods("6")).toBe(6);
     expect(parseAnalyticsReportingPeriods("999")).toBe(12);
     expect(parseAnalyticsReportingPeriods("anything")).toBe(12);
+  });
+
+  it("applies only a governed dimension member and keeps totals as the default", async () => {
+    const viewId = await createBoard("Segmented operations");
+    const filtered = await withUserContext(
+      { userId: owner.profileId, tenantId: owner.tenantId },
+      (client) => loadAnalyticsViewRuntime(client, {
+        tenantId: owner.tenantId,
+        viewId,
+        reportingPeriods: 3,
+        requestedDimensionKey: "customer_segment",
+        requestedMemberKey: "enterprise",
+      }),
+    );
+    expect(filtered?.filterContext.activeDimensionKey).toBe("customer_segment");
+    expect(filtered?.filterContext.activeMemberKey).toBe("enterprise");
+    expect(filtered?.values).toHaveLength(1);
+    expect(filtered?.values[0]?.actualValue).toBe(72);
+
+    const invalid = await withUserContext(
+      { userId: owner.profileId, tenantId: owner.tenantId },
+      (client) => loadAnalyticsViewRuntime(client, {
+        tenantId: owner.tenantId,
+        viewId,
+        reportingPeriods: 3,
+        requestedDimensionKey: "customer_segment",
+        requestedMemberKey: "not_governed",
+      }),
+    );
+    expect(invalid?.filterContext.activeDimensionKey).toBeNull();
+    expect(invalid?.values).toHaveLength(3);
+  });
+
+  it("rejects KPI slices that are not linked to an active governed member", async () => {
+    await expect(admin.query(
+      `insert into public.kpi_values
+         (tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
+          actual_value, source_refreshed_at, calculated_by, dimension_slice)
+       values ($1, $2, $3, current_date - 14, current_date - 7,
+               1, now(), $4, '{"customer_segment":"invented"}'::jsonb)`,
+      [owner.tenantId, metricId, companyNodeId, owner.profileId],
+    )).rejects.toThrow(/ungoverned dimension or member/);
   });
 
   it("shares a published board with a named member without widening ownership", async () => {
