@@ -37,6 +37,15 @@ export function proxy(request: NextRequest) {
   requestHeaders.delete("x-tenant-slug");
   if (kind === "tenant" && slug) requestHeaders.set("x-tenant-slug", slug);
 
+  // Layouts can't read the pathname directly, but MFA enforcement needs it to
+  // exempt the enrolment page (otherwise enforcement is a redirect loop).
+  // Deleted first for the same reason as x-tenant-slug: a spoofed
+  // "x-pathname: /admin/security" would otherwise let an unenrolled
+  // privileged user skip enforcement on every page. Each branch below sets
+  // this to the EFFECTIVE path after any rewrite, which is what renders.
+  requestHeaders.delete("x-pathname");
+  requestHeaders.set("x-pathname", request.nextUrl.pathname);
+
   // Preview deployments and the temporary *.vercel.app production URL
   // cannot represent a tenant as a subdomain. Support /t/:slug/* only on
   // apex hosts, then rewrite it to the normal application route while
@@ -50,6 +59,7 @@ export function proxy(request: NextRequest) {
     requestHeaders.set("x-tenant-slug", pathTenant[1]);
     const url = request.nextUrl.clone();
     url.pathname = pathTenant[2] || "/home";
+    requestHeaders.set("x-pathname", url.pathname);
     return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
   }
 
@@ -74,9 +84,19 @@ export function proxy(request: NextRequest) {
   // which meant /platform-admin/audit was unreachable via admin.*/audit;
   // fixed to a prefix-exclusion instead of an exact-match inclusion.
   const SHARED_PREFIXES = ["/login", "/invite", "/api"];
+  // Internal links and Server Action redirects may already use the real App
+  // Router namespace. Let those paths pass through instead of prefixing them
+  // a second time (which would produce /platform-admin/platform-admin/*).
+  const isPlatformAdminPath =
+    request.nextUrl.pathname === "/platform-admin" ||
+    request.nextUrl.pathname.startsWith("/platform-admin/");
+  if (kind === "admin" && isPlatformAdminPath) {
+    return NextResponse.next({ request: { headers: requestHeaders } });
+  }
   if (kind === "admin" && !SHARED_PREFIXES.some((p) => request.nextUrl.pathname.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = `/platform-admin${request.nextUrl.pathname === "/" ? "" : request.nextUrl.pathname}`;
+    requestHeaders.set("x-pathname", url.pathname);
     return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
   }
 

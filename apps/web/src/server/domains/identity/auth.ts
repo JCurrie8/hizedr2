@@ -33,7 +33,10 @@ export const auth = betterAuth({
   },
   // nextCookies() must stay last — it patches Server Action cookie
   // handling and Better Auth applies plugin hooks in registration order.
-  plugins: [twoFactor(), nextCookies()],
+  // issuer is what shows in the user's authenticator app next to the code —
+  // without it they see a bare email address and can't tell which account
+  // it belongs to once they have more than one.
+  plugins: [twoFactor({ issuer: "Hized" }), nextCookies()],
   advanced: {
     database: {
       generateId: () => crypto.randomUUID(),

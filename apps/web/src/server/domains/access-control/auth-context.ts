@@ -2,6 +2,7 @@ import type { AppRole } from "@hized/contracts";
 import { dbPool as pool } from "../../db-pool";
 import { auth } from "../identity/auth";
 import { writeAuditLog } from "./audit";
+import { mfaEnrolmentPath, tenantRoleRequiresMfa, type MfaScope } from "./mfa-policy";
 
 export interface TenantAuthContext {
   kind: "tenant";
@@ -9,6 +10,8 @@ export interface TenantAuthContext {
   fullName: string | null;
   isHizedStaff: boolean;
   isPlatformAdmin: boolean;
+  /** Better Auth's own flag — the source of truth for whether TOTP is set up. */
+  twoFactorEnabled: boolean;
   tenant: {
     id: string;
     slug: string;
@@ -23,11 +26,19 @@ export interface PlatformAdminAuthContext {
   kind: "platform_admin";
   profileId: string;
   fullName: string | null;
+  twoFactorEnabled: boolean;
+}
+
+export interface MfaRequiredAuthContext {
+  kind: "mfa_required";
+  scope: MfaScope;
+  enrolmentPath: string;
 }
 
 export type AuthResult =
   | TenantAuthContext
   | PlatformAdminAuthContext
+  | MfaRequiredAuthContext
   | { kind: "unauthenticated" }
   | { kind: "forbidden" };
 
@@ -51,6 +62,8 @@ export type AuthResult =
 export async function getAuthContext(opts: {
   tenantSlug: string | null;
   platformAdminRoute?: boolean;
+  /** Only the dedicated enrolment page may opt out of the MFA authority gate. */
+  allowUnenrolledMfa?: boolean;
   requestHeaders: Headers;
 }): Promise<AuthResult> {
   const session = await auth.api.getSession({ headers: opts.requestHeaders });
@@ -63,9 +76,25 @@ export async function getAuthContext(opts: {
   const profile = profileRows[0];
   if (!profile) return { kind: "unauthenticated" }; // provisioning didn't run — treat as not signed in
 
+  const twoFactorEnabled = Boolean(
+    (session.user as { twoFactorEnabled?: boolean | null }).twoFactorEnabled,
+  );
+
   if (opts.platformAdminRoute) {
     if (!profile.is_platform_admin) return { kind: "forbidden" };
-    return { kind: "platform_admin", profileId: profile.profile_id, fullName: profile.full_name };
+    if (!twoFactorEnabled && !opts.allowUnenrolledMfa) {
+      return {
+        kind: "mfa_required",
+        scope: "platform_admin",
+        enrolmentPath: mfaEnrolmentPath("platform_admin"),
+      };
+    }
+    return {
+      kind: "platform_admin",
+      profileId: profile.profile_id,
+      fullName: profile.full_name,
+      twoFactorEnabled,
+    };
   }
 
   if (!opts.tenantSlug) return { kind: "forbidden" };
@@ -99,12 +128,25 @@ export async function getAuthContext(opts: {
     return { kind: "forbidden" };
   }
 
+  if (
+    tenantRoleRequiresMfa(membership.role) &&
+    !twoFactorEnabled &&
+    !opts.allowUnenrolledMfa
+  ) {
+    return {
+      kind: "mfa_required",
+      scope: "tenant",
+      enrolmentPath: mfaEnrolmentPath("tenant"),
+    };
+  }
+
   return {
     kind: "tenant",
     profileId: profile.profile_id,
     fullName: profile.full_name,
     isHizedStaff: profile.is_hized_staff,
     isPlatformAdmin: profile.is_platform_admin,
+    twoFactorEnabled,
     tenant: {
       id: membership.tenant_id,
       slug: opts.tenantSlug,
@@ -123,12 +165,16 @@ export async function getAuthContext(opts: {
  * only place next/headers() is imported for this purpose, so the rest
  * stays testable.
  */
-export async function getAuthContextFromRequest(opts: { platformAdminRoute?: boolean } = {}): Promise<AuthResult> {
+export async function getAuthContextFromRequest(opts: {
+  platformAdminRoute?: boolean;
+  allowUnenrolledMfa?: boolean;
+} = {}): Promise<AuthResult> {
   const { headers } = await import("next/headers");
   const h = await headers();
   return getAuthContext({
     tenantSlug: h.get("x-tenant-slug"),
     platformAdminRoute: opts.platformAdminRoute,
+    allowUnenrolledMfa: opts.allowUnenrolledMfa,
     requestHeaders: h,
   });
 }

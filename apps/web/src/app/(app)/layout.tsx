@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
+import { isMfaEnrolmentPath } from "@/server/domains/access-control/mfa-policy";
 import {
   accessibleForeground,
   brandingFontVariables,
@@ -15,12 +16,15 @@ import { SignOutButton } from "@/components/SignOutButton";
 import { TenantNavigation } from "@/components/TenantNavigation";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const ctx = await getAuthContextFromRequest();
+  const requestHeaders = await headers();
+  const ctx = await getAuthContextFromRequest({
+    allowUnenrolledMfa: isMfaEnrolmentPath("tenant", requestHeaders.get("x-pathname") ?? ""),
+  });
 
   if (ctx.kind === "unauthenticated") redirect("/login");
+  if (ctx.kind === "mfa_required") redirect(ctx.enrolmentPath);
 
   if (ctx.kind === "forbidden") {
-    const requestHeaders = await headers();
     if (!requestHeaders.get("x-tenant-slug")) redirect("/organisations");
 
     return (
@@ -37,16 +41,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (ctx.kind === "platform_admin") redirect("/"); // platform admins operate from admin.*, not a tenant subdomain
 
-  const [requestHeaders, { branding, entitlements }] = await Promise.all([
-    headers(),
-    withUserContext(
+  const { branding, entitlements } = await withUserContext(
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => ({
         branding: await getPublishedBranding(client, { tenantId: ctx.tenant.id }),
         entitlements: await listProductEntitlements(client, { tenantId: ctx.tenant.id }),
       }),
-    ),
-  ]);
+    );
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });

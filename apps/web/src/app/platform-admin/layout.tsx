@@ -1,12 +1,22 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
+import { isMfaEnrolmentPath } from "@/server/domains/access-control/mfa-policy";
 import { SignOutButton } from "@/components/SignOutButton";
 import Link from "next/link";
 
 export default async function PlatformAdminLayout({ children }: { children: React.ReactNode }) {
-  const ctx = await getAuthContextFromRequest({ platformAdminRoute: true });
+  const requestHeaders = await headers();
+  const ctx = await getAuthContextFromRequest({
+    platformAdminRoute: true,
+    allowUnenrolledMfa: isMfaEnrolmentPath(
+      "platform_admin",
+      requestHeaders.get("x-pathname") ?? "",
+    ),
+  });
 
   if (ctx.kind === "unauthenticated") redirect("/login");
+  if (ctx.kind === "mfa_required") redirect(ctx.enrolmentPath);
   if (ctx.kind !== "platform_admin") {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -18,6 +28,9 @@ export default async function PlatformAdminLayout({ children }: { children: Reac
     );
   }
 
+  // Platform Admin is the most privileged access in Hized (blueprint 7.4),
+  // so a second factor is required unconditionally — not role-dependent
+  // like the tenant side.
   return (
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-line bg-ink">
@@ -26,6 +39,7 @@ export default async function PlatformAdminLayout({ children }: { children: Reac
           <nav className="ml-auto flex items-center gap-4 text-sm text-mist">
             <Link href="/platform-admin" className="hover:text-white">Tenants</Link>
             <Link href="/platform-admin/audit" className="hover:text-white">Audit</Link>
+            <Link href="/platform-admin/security" className="hover:text-white">Security</Link>
             <span>{ctx.fullName ?? "You"}</span>
             <SignOutButton />
           </nav>

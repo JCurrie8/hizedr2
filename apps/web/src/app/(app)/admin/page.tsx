@@ -42,6 +42,14 @@ const settings = [
     path: "/admin/audit",
     adminOnly: true,
   },
+  {
+    // Visible to every role: optional for most, required for Company Admins,
+    // and everyone should be able to find where to turn it on.
+    title: "Security",
+    description: "Two-factor authentication for your own account.",
+    path: "/admin/security",
+    adminOnly: false,
+  },
 ] as const;
 
 export default async function SettingsPage() {
