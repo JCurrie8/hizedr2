@@ -87,7 +87,10 @@ export function proxy(request: NextRequest) {
   // Internal links and Server Action redirects may already use the real App
   // Router namespace. Let those paths pass through instead of prefixing them
   // a second time (which would produce /platform-admin/platform-admin/*).
-  if (kind === "admin" && request.nextUrl.pathname.startsWith("/platform-admin")) {
+  const isPlatformAdminPath =
+    request.nextUrl.pathname === "/platform-admin" ||
+    request.nextUrl.pathname.startsWith("/platform-admin/");
+  if (kind === "admin" && isPlatformAdminPath) {
     return NextResponse.next({ request: { headers: requestHeaders } });
   }
   if (kind === "admin" && !SHARED_PREFIXES.some((p) => request.nextUrl.pathname.startsWith(p))) {
