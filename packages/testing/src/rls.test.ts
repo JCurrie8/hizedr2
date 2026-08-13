@@ -763,7 +763,19 @@ describe("RLS tenant isolation", () => {
            values ($1, $2, $3, $4, '{"customer_email":"leak@test.invalid"}'::jsonb, now())`,
           [tenantA.tenantId, lineageA.datasetId, lineageA.recordId, lineageA.nodeId],
         ),
-      )).rejects.toThrow(/unknown or sensitive field/);
+      )).rejects.toThrow(/unknown, sensitive, or incorrectly typed field/);
+
+      await expect(withUserContext(
+        { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+        (client) => client.query(
+          `insert into public.governed_record_projections
+             (tenant_id, dataset_id, source_record_id, org_node_id, display_data, source_refreshed_at)
+           values ($1, $2, $3, $4,
+                   '{"reference":{"customer_email":"nested-leak@test.invalid"}}'::jsonb,
+                   now())`,
+          [tenantA.tenantId, lineageA.datasetId, lineageA.recordId, lineageA.nodeId],
+        ),
+      )).rejects.toThrow(/unknown, sensitive, or incorrectly typed field/);
     } finally {
       await admin.query(
         "delete from public.tenant_memberships where tenant_id = $1 and user_id = $2",
