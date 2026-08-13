@@ -7,6 +7,11 @@ import type {
 import { thresholdState } from "@/server/domains/pulse/kpis";
 
 const PALETTE = ["#0E7C80", "#0F2A43", "#E0A52B", "#D64545", "#678C93", "#7C5CA8", "#2D8B57", "#C66A2B"];
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
 
 const WIDTH_CLASSES: Record<number, string> = {
   3: "md:col-span-3",
@@ -68,6 +73,69 @@ function EmptyVisual({ message = "No permitted values are available for this vis
     <div className="flex min-h-40 items-center justify-center rounded-lg border border-dashed border-line bg-canvas px-5 text-center text-sm leading-6 text-muted">
       {message}
     </div>
+  );
+}
+
+function InspectDataTable({
+  widget,
+  rows,
+}: {
+  widget: AnalyticsWidgetDefinition;
+  rows: AnalyticsValuePoint[];
+}) {
+  const sortedRows = [...rows].sort((left, right) =>
+    left.metricName.localeCompare(right.metricName)
+      || left.organisationName.localeCompare(right.organisationName)
+      || right.periodEnd.localeCompare(left.periodEnd),
+  );
+
+  return (
+    <details className="mt-5 border-t border-line pt-4">
+      <summary className="cursor-pointer text-sm font-semibold text-teal-deep marker:text-muted">
+        Inspect data · {sortedRows.length} permitted row{sortedRows.length === 1 ? "" : "s"}
+      </summary>
+      <p className="mt-2 text-xs leading-5 text-muted">
+        Exact aggregate values behind this visual. Organisation scope and KPI permissions are applied before these rows reach the page.
+      </p>
+      {sortedRows.length > 0 ? (
+        <div className="mt-3 overflow-x-auto rounded-lg border border-line">
+          <table className="w-full min-w-[760px] text-left text-xs">
+            <caption className="sr-only">Permitted aggregate data behind {widget.title}</caption>
+            <thead>
+              <tr className="border-b border-line bg-canvas uppercase tracking-wide text-muted">
+                <th className="px-3 py-2.5">Measure</th>
+                <th className="px-3 py-2.5">Area</th>
+                <th className="px-3 py-2.5">Period ending</th>
+                <th className="px-3 py-2.5 text-right">Actual</th>
+                <th className="px-3 py-2.5 text-right">Target</th>
+                <th className="px-3 py-2.5 text-right">Prior</th>
+                <th className="px-3 py-2.5">Source refreshed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map((row) => {
+                const metric = widget.metrics.find((item) => item.id === row.metricId);
+                return (
+                  <tr key={`${row.metricId}-${row.organisationId}-${row.periodEnd}`} className="border-b border-line/70 last:border-0">
+                    <th className="px-3 py-2.5 font-medium text-ink">{metric?.label ?? row.metricName}</th>
+                    <td className="px-3 py-2.5 text-muted">{row.organisationName}</td>
+                    <td className="px-3 py-2.5 text-muted">{shortDate(row.periodEnd)}</td>
+                    <td className="px-3 py-2.5 text-right font-semibold text-ink">{formatValue(metric, row.actualValue)}</td>
+                    <td className="px-3 py-2.5 text-right text-muted">{row.targetValue === null ? "—" : formatValue(metric, row.targetValue)}</td>
+                    <td className="px-3 py-2.5 text-right text-muted">{row.priorPeriodValue === null ? "—" : formatValue(metric, row.priorPeriodValue)}</td>
+                    <td className="px-3 py-2.5 text-muted">{DATE_TIME_FORMATTER.format(new Date(row.sourceRefreshedAt))}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="mt-3 rounded-lg border border-dashed border-line bg-canvas p-4 text-sm text-muted">
+          No permitted aggregate rows are available for the active filters.
+        </p>
+      )}
+    </details>
   );
 }
 
@@ -420,6 +488,7 @@ export function AnalyticsViewRenderer({ runtime }: { runtime: AnalyticsViewRunti
               <span className="shrink-0 rounded-full bg-canvas px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">{widget.visualType.replaceAll("_", " ")}</span>
             </div>
             <AnalyticsVisual widget={widget} rows={rows} />
+            {widget.visualType !== "text" && <InspectDataTable widget={widget} rows={rows} />}
           </article>
         );
       })}

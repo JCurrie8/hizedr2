@@ -13,7 +13,12 @@ import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { redirect } from "next/navigation";
 import { AnalyticsViewRenderer } from "@/components/visuals/AnalyticsViewRenderer";
-import { getDefaultPulseView, loadAnalyticsViewRuntime } from "@/server/domains/analytics/visual-views";
+import {
+  ANALYTICS_REPORTING_PERIODS,
+  getDefaultPulseView,
+  loadAnalyticsViewRuntime,
+  parseAnalyticsReportingPeriods,
+} from "@/server/domains/analytics/visual-views";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -91,12 +96,18 @@ function TrendSparkline({ kpi }: { kpi: PulseKpiCard }) {
   );
 }
 
-export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ org?: string }> }) {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ org?: string; periods?: string }>;
+}) {
   const ctx = await getAuthContextFromRequest();
   if (ctx.kind !== "tenant") return null; // layout already redirects/handles other cases
 
-  const requestedOrg = (await searchParams).org;
+  const search = await searchParams;
+  const requestedOrg = search.org;
   const requestedOrgNodeId = requestedOrg && UUID_PATTERN.test(requestedOrg) ? requestedOrg : null;
+  const reportingPeriods = parseAnalyticsReportingPeriods(search.periods);
 
   const includeConnectHealth = ctx.role === "company_admin" || ctx.role === "analyst";
   const [requestHeaders, pulseResult] = await Promise.all([
@@ -108,7 +119,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         const snapshot = await getPulseHomeSnapshot(client, { tenantId: ctx.tenant.id, includeConnectHealth, requestedOrgNodeId });
         const defaultView = await getDefaultPulseView(client, { tenantId: ctx.tenant.id });
         const configuredView = defaultView
-          ? await loadAnalyticsViewRuntime(client, { tenantId: ctx.tenant.id, viewId: defaultView.id, requestedOrgNodeId })
+          ? await loadAnalyticsViewRuntime(client, {
+              tenantId: ctx.tenant.id,
+              viewId: defaultView.id,
+              requestedOrgNodeId,
+              reportingPeriods,
+            })
           : null;
         return { snapshot, configuredView };
       },
@@ -123,6 +139,13 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const connect = snapshot.connect;
   const kpis = snapshot.kpis;
   const hierarchy = snapshot.hierarchy;
+  const dashboardHref = (orgNodeId: string | null, periods = reportingPeriods) => {
+    const query = new URLSearchParams();
+    if (orgNodeId) query.set("org", orgNodeId);
+    if (periods !== 12) query.set("periods", String(periods));
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return tenantHref(`/dashboard${suffix}`);
+  };
   const hasCompletedRun = connect?.recentRuns.some((run) => run.status === "succeeded" || run.status === "warning") ?? false;
   const kpisNeedingAttention = kpis.filter((kpi) => ["amber", "red"].includes(thresholdState(kpi)) || kpi.freshness.status === "stale");
   const attentionCount = (connect?.failedRuns ?? 0) + (connect?.warningRuns ?? 0) + kpisNeedingAttention.length;
@@ -153,7 +176,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 {index > 0 && <span aria-hidden="true" className="text-muted">/</span>}
                 {isCurrent
                   ? <span aria-current="page" className="font-semibold text-ink">{node.name}</span>
-                  : <Link href={tenantHref(`/dashboard?org=${encodeURIComponent(node.id)}`)} className="font-medium text-teal-deep hover:underline">{node.name}</Link>}
+                  : <Link href={dashboardHref(node.id)} className="font-medium text-teal-deep hover:underline">{node.name}</Link>}
               </div>
             );
           })}
@@ -209,6 +232,38 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               <h2 id="configured-pulse-heading" className="mt-1 font-display text-2xl font-semibold text-ink">{configuredView.view.name}</h2>
             </div>
             {(ctx.role === "company_admin" || ctx.role === "analyst") && <Link href={tenantHref(`/admin/dashboards/${configuredView.view.id}`)} className="rounded-md border border-line bg-panel px-3 py-2 text-sm font-semibold text-ink hover:border-teal-deep">Configure Pulse</Link>}
+          </div>
+          <div className="mb-4 rounded-xl border border-line bg-panel p-4 sm:p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.14em] text-teal-deep">Global filters</p>
+                <h3 className="mt-1 font-display text-lg font-semibold text-ink">Reporting window</h3>
+                <p className="mt-1 text-xs leading-5 text-muted">
+                  Applies to every compatible visual. Organisation is already scoped to {hierarchy?.selected.name ?? "your permitted area"}.
+                </p>
+              </div>
+              {(reportingPeriods !== 12 || requestedOrgNodeId) && (
+                <Link href={dashboardHref(null, 12)} className="text-sm font-semibold text-teal-deep hover:underline">
+                  Reset filters
+                </Link>
+              )}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2" aria-label="Reporting period filter">
+              {ANALYTICS_REPORTING_PERIODS.map((periods) => {
+                const active = periods === reportingPeriods;
+                const label = periods === 1 ? "Latest period" : `Last ${periods} periods`;
+                return (
+                  <Link
+                    key={periods}
+                    href={dashboardHref(hierarchy?.selected.id ?? null, periods)}
+                    aria-current={active ? "true" : undefined}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${active ? "border-teal-deep bg-teal-deep text-white" : "border-line bg-canvas text-ink hover:border-teal"}`}
+                  >
+                    {label}
+                  </Link>
+                );
+              })}
+            </div>
           </div>
           <AnalyticsViewRenderer runtime={configuredView} />
         </section>
@@ -302,7 +357,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             {hierarchy.children.map((child) => (
               <Link
                 key={child.id}
-                href={tenantHref(`/dashboard?org=${encodeURIComponent(child.id)}`)}
+                href={dashboardHref(child.id)}
                 className="group rounded-lg border border-line bg-canvas p-4 transition hover:border-teal hover:bg-white"
               >
                 <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">{child.nodeType.replaceAll("_", " ")}</span>

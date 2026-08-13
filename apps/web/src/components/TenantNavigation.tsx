@@ -23,7 +23,7 @@ export function TenantNavigation({ items }: { items: NavigationItem[] }) {
   const current = activeSection(usePathname());
 
   return (
-    <nav aria-label="Main navigation" className="-mx-1 flex gap-1 overflow-x-auto pb-3 text-sm [scrollbar-width:none]">
+    <nav aria-label="Main navigation" className="-mx-1 flex gap-0 overflow-x-auto pb-3 text-xs [scrollbar-width:none] sm:gap-1 sm:text-sm">
       {items.map((item) => {
         const active = current === item.section;
         return (
@@ -31,7 +31,7 @@ export function TenantNavigation({ items }: { items: NavigationItem[] }) {
             key={item.section}
             href={item.href}
             aria-current={active ? "page" : undefined}
-            className={`whitespace-nowrap rounded-md px-3 py-2 transition-colors ${
+            className={`whitespace-nowrap rounded-md px-2.5 py-2 transition-colors sm:px-3 ${
               active
                 ? "font-semibold"
                 : "text-muted hover:bg-canvas hover:text-ink"
