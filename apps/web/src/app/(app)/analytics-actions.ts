@@ -10,15 +10,20 @@ import { assertProductAccess } from "@/server/domains/products/entitlements";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import {
   ANALYTICS_HEIGHTS,
+  ANALYTICS_GRANT_PERMISSIONS,
+  ANALYTICS_GRANT_TYPES,
   ANALYTICS_SOURCE_MODES,
   ANALYTICS_SURFACES,
   ANALYTICS_VISUAL_TYPES,
   addAnalyticsWidget,
   createAnalyticsView,
+  duplicateAnalyticsView,
   moveAnalyticsWidget,
   publishAnalyticsView,
+  removeAnalyticsViewGrant,
   removeAnalyticsWidget,
   resizeAnalyticsWidget,
+  setAnalyticsViewGrant,
   updateAnalyticsView,
   type AnalyticsSurface,
   type AnalyticsVisibility,
@@ -111,6 +116,84 @@ export async function updateAnalyticsViewAction(formData: FormData): Promise<voi
     await insertAuditLog(client, { tenantId: ctx.tenant.id, actorUserId: ctx.profileId, action: `${surface}.view_updated`, targetType: "analytics_view", targetId: viewId });
   });
   revalidateView(surface, viewId);
+}
+
+export async function setAnalyticsViewGrantAction(formData: FormData): Promise<void> {
+  const ctx = await requireAnalyticsAccess("canvas", true);
+  const viewId = uuidValue(formData, "viewId", "board");
+  const type = enumValue(formData, "grantType", ANALYTICS_GRANT_TYPES, "sharing target");
+  const permission = enumValue(formData, "permission", ANALYTICS_GRANT_PERMISSIONS, "permission");
+  const targetId = textValue(formData, "targetId", "Sharing target", 100);
+  if (type !== "role" && !UUID_PATTERN.test(targetId)) throw new Error("Choose a valid sharing target.");
+
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    const grant = await setAnalyticsViewGrant(client, {
+      tenantId: ctx.tenant.id,
+      viewId,
+      actorUserId: ctx.profileId,
+      type,
+      targetId,
+      permission,
+    });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "canvas.sharing_rule_set",
+      targetType: "analytics_view_grant",
+      targetId: grant.id,
+      metadata: { viewId, granteeType: type, permission },
+    });
+  });
+  revalidateView("canvas", viewId);
+}
+
+export async function removeAnalyticsViewGrantAction(formData: FormData): Promise<void> {
+  const ctx = await requireAnalyticsAccess("canvas", true);
+  const viewId = uuidValue(formData, "viewId", "board");
+  const grantId = uuidValue(formData, "grantId", "sharing rule");
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    await removeAnalyticsViewGrant(client, {
+      tenantId: ctx.tenant.id,
+      viewId,
+      grantId,
+      actorUserId: ctx.profileId,
+    });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "canvas.sharing_rule_removed",
+      targetType: "analytics_view_grant",
+      targetId: grantId,
+      metadata: { viewId },
+    });
+  });
+  revalidateView("canvas", viewId);
+}
+
+export async function duplicateAnalyticsViewAction(formData: FormData): Promise<void> {
+  const ctx = await requireAnalyticsAccess("canvas", true);
+  const sourceViewId = uuidValue(formData, "viewId", "board");
+  const created = await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    const copy = await duplicateAnalyticsView(client, {
+      tenantId: ctx.tenant.id,
+      viewId: sourceViewId,
+      actorUserId: ctx.profileId,
+    });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "canvas.view_duplicated",
+      targetType: "analytics_view",
+      targetId: copy.id,
+      metadata: { sourceViewId },
+    });
+    return copy;
+  });
+  revalidateView("canvas", created.id);
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("host") ?? "localhost";
+  const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
+  redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: `/canvas/${created.id}` }));
 }
 
 export async function addAnalyticsWidgetAction(formData: FormData): Promise<void> {

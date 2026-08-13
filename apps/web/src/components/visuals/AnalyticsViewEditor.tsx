@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   addAnalyticsWidgetAction,
+  duplicateAnalyticsViewAction,
   moveAnalyticsWidgetAction,
   publishAnalyticsViewAction,
   removeAnalyticsWidgetAction,
@@ -9,10 +10,13 @@ import {
 } from "@/app/(app)/analytics-actions";
 import type {
   AnalyticsMetricOption,
+  AnalyticsSharingOptions,
   AnalyticsSurface,
+  AnalyticsViewGrant,
   AnalyticsViewRuntime,
 } from "@/server/domains/analytics/visual-views";
 import { AnalyticsViewRenderer } from "./AnalyticsViewRenderer";
+import { AnalyticsSharingPanel } from "./AnalyticsSharingPanel";
 
 const VISUALS = [
   ["kpi", "KPI card", "A prominent current value, target and status."],
@@ -42,11 +46,13 @@ export function AnalyticsViewEditor({
   runtime,
   metrics,
   backHref,
+  sharing,
 }: {
   surface: AnalyticsSurface;
   runtime: AnalyticsViewRuntime;
   metrics: AnalyticsMetricOption[];
   backHref: string;
+  sharing?: { grants: AnalyticsViewGrant[]; options: AnalyticsSharingOptions } | null;
 }) {
   const { view } = runtime;
   return (
@@ -62,13 +68,23 @@ export function AnalyticsViewEditor({
               : "Compose a personal or shared analysis board without copying data or redefining KPIs. Viewers resolve every value through their own permissions."}
           </p>
         </div>
-        <form action={publishAnalyticsViewAction}>
-          <input type="hidden" name="surface" value={surface} />
-          <input type="hidden" name="viewId" value={view.id} />
-          <button className="tenant-brand-primary rounded-md px-4 py-2 text-sm font-semibold" type="submit">
-            {surface === "pulse" ? "Publish as company default" : "Publish board"}
-          </button>
-        </form>
+        <div className="flex flex-wrap gap-2">
+          {surface === "canvas" && (
+            <form action={duplicateAnalyticsViewAction}>
+              <input type="hidden" name="viewId" value={view.id} />
+              <button className="rounded-md border border-line bg-panel px-4 py-2 text-sm font-semibold text-ink hover:border-teal-deep" type="submit">
+                Duplicate board
+              </button>
+            </form>
+          )}
+          <form action={publishAnalyticsViewAction}>
+            <input type="hidden" name="surface" value={surface} />
+            <input type="hidden" name="viewId" value={view.id} />
+            <button className="tenant-brand-primary rounded-md px-4 py-2 text-sm font-semibold" type="submit">
+              {surface === "pulse" ? "Publish as company default" : "Publish board"}
+            </button>
+          </form>
+        </div>
       </div>
 
       <section className="rounded-xl border border-line bg-panel p-5">
@@ -80,19 +96,28 @@ export function AnalyticsViewEditor({
           <input type="hidden" name="surface" value={surface} />
           <input type="hidden" name="viewId" value={view.id} />
           <label className="text-sm font-medium text-ink">Name<input className={inputClass} name="name" defaultValue={view.name} maxLength={120} required /></label>
-          {surface === "canvas" ? (
+          {surface === "canvas" && view.isOwner ? (
             <label className="text-sm font-medium text-ink">Who can open it
-              <select className={inputClass} name="visibility" defaultValue={view.visibility}>
+              <select key={view.visibility} className={inputClass} name="visibility" defaultValue={view.visibility}>
                 <option value="private">Only me</option>
                 <option value="tenant">Everyone in the company</option>
-                <option value="restricted" disabled>Chosen people or roles (next sharing slice)</option>
+                <option value="restricted">Chosen people, roles or areas</option>
               </select>
             </label>
-          ) : <input type="hidden" name="visibility" value="tenant" />}
+          ) : <input type="hidden" name="visibility" value={surface === "pulse" ? "tenant" : view.visibility} />}
           <label className="text-sm font-medium text-ink md:col-span-2">Description<textarea className={inputClass} name="description" defaultValue={view.description} maxLength={500} rows={2} /></label>
           <button type="submit" className="w-fit rounded-md border border-line bg-canvas px-4 py-2 text-sm font-semibold text-ink hover:border-teal-deep">Save settings</button>
         </form>
       </section>
+
+      {surface === "canvas" && view.isOwner && sharing && (
+        <AnalyticsSharingPanel
+          viewId={view.id}
+          status={view.status}
+          grants={sharing.grants}
+          options={sharing.options}
+        />
+      )}
 
       <section className="rounded-xl border border-line bg-panel p-5">
         <h2 className="font-display text-xl font-semibold text-ink">Add a visual</h2>
