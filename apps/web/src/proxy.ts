@@ -84,6 +84,12 @@ export function proxy(request: NextRequest) {
   // which meant /platform-admin/audit was unreachable via admin.*/audit;
   // fixed to a prefix-exclusion instead of an exact-match inclusion.
   const SHARED_PREFIXES = ["/login", "/invite", "/api"];
+  // Internal links and Server Action redirects may already use the real App
+  // Router namespace. Let those paths pass through instead of prefixing them
+  // a second time (which would produce /platform-admin/platform-admin/*).
+  if (kind === "admin" && request.nextUrl.pathname.startsWith("/platform-admin")) {
+    return NextResponse.next({ request: { headers: requestHeaders } });
+  }
   if (kind === "admin" && !SHARED_PREFIXES.some((p) => request.nextUrl.pathname.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = `/platform-admin${request.nextUrl.pathname === "/" ? "" : request.nextUrl.pathname}`;

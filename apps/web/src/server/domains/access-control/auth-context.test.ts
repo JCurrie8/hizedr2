@@ -132,4 +132,63 @@ describe("getAuthContext", () => {
       }),
     ).toBe("/admin/security");
   });
+
+  it("withholds Company Admin authority until MFA is enrolled", async () => {
+    await admin.query(
+      "update public.tenant_memberships set role = 'company_admin' where tenant_id = $1 and user_id = $2",
+      [tenantAId, profileId],
+    );
+
+    try {
+      const denied = await getAuthContext({ tenantSlug: tenantASlug, requestHeaders: sessionHeaders });
+      expect(denied).toEqual({
+        kind: "mfa_required",
+        scope: "tenant",
+        enrolmentPath: "/admin/security",
+      });
+
+      const enrolmentContext = await getAuthContext({
+        tenantSlug: tenantASlug,
+        requestHeaders: sessionHeaders,
+        allowUnenrolledMfa: true,
+      });
+      expect(enrolmentContext.kind).toBe("tenant");
+      if (enrolmentContext.kind === "tenant") {
+        expect(enrolmentContext.role).toBe("company_admin");
+        expect(enrolmentContext.twoFactorEnabled).toBe(false);
+      }
+    } finally {
+      await admin.query(
+        "update public.tenant_memberships set role = 'manager' where tenant_id = $1 and user_id = $2",
+        [tenantAId, profileId],
+      );
+    }
+  });
+
+  it("withholds Platform Admin authority until MFA is enrolled", async () => {
+    await admin.query("insert into public.platform_admins (user_id) values ($1)", [profileId]);
+
+    try {
+      const denied = await getAuthContext({
+        tenantSlug: null,
+        platformAdminRoute: true,
+        requestHeaders: sessionHeaders,
+      });
+      expect(denied).toEqual({
+        kind: "mfa_required",
+        scope: "platform_admin",
+        enrolmentPath: "/platform-admin/security",
+      });
+
+      const enrolmentContext = await getAuthContext({
+        tenantSlug: null,
+        platformAdminRoute: true,
+        requestHeaders: sessionHeaders,
+        allowUnenrolledMfa: true,
+      });
+      expect(enrolmentContext.kind).toBe("platform_admin");
+    } finally {
+      await admin.query("delete from public.platform_admins where user_id = $1", [profileId]);
+    }
+  });
 });

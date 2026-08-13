@@ -2,7 +2,10 @@ import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-
 import { TwoFactorSetup } from "@/components/TwoFactorSetup";
 
 export default async function PlatformAdminSecurityPage() {
-  const ctx = await getAuthContextFromRequest({ platformAdminRoute: true });
+  const ctx = await getAuthContextFromRequest({
+    platformAdminRoute: true,
+    allowUnenrolledMfa: true,
+  });
   if (ctx.kind !== "platform_admin") return null; // layout already handles other cases
 
   return (

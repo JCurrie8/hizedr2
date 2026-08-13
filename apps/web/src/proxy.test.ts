@@ -68,6 +68,16 @@ describe("tenant proxy", () => {
     expect(response.headers.get("x-middleware-rewrite")).toBe("https://admin.hized.app/platform-admin/audit");
   });
 
+  it("does not double-prefix an already namespaced Platform Admin path", () => {
+    const response = proxy(
+      new NextRequest("https://admin.hized.app/platform-admin/security", {
+        headers: { host: "admin.hized.app", "x-pathname": "/spoofed" },
+      }),
+    );
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(response.headers.get("x-middleware-request-x-pathname")).toBe("/platform-admin/security");
+  });
+
   it("routes the apex root through the signed-in organisation chooser", () => {
     const response = proxy(
       new NextRequest("https://hized.app/", { headers: { host: "hized.app" } }),

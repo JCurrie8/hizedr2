@@ -3,7 +3,7 @@ import { tenantRoleRequiresMfa } from "@/server/domains/access-control/mfa-polic
 import { TwoFactorSetup } from "@/components/TwoFactorSetup";
 
 export default async function SecurityPage() {
-  const ctx = await getAuthContextFromRequest();
+  const ctx = await getAuthContextFromRequest({ allowUnenrolledMfa: true });
   if (ctx.kind !== "tenant") return null; // layout already handles other cases
 
   const required = tenantRoleRequiresMfa(ctx.role);

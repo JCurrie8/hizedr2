@@ -18,6 +18,19 @@ const MFA_REQUIRED_TENANT_ROLES: readonly AppRole[] = ["company_admin"];
 const TENANT_MFA_EXEMPT_PREFIXES = ["/admin/security"] as const;
 const PLATFORM_ADMIN_MFA_EXEMPT_PREFIXES = ["/platform-admin/security"] as const;
 
+export type MfaScope = "tenant" | "platform_admin";
+
+export function mfaEnrolmentPath(scope: MfaScope): string {
+  return scope === "platform_admin" ? "/platform-admin/security" : "/admin/security";
+}
+
+export function isMfaEnrolmentPath(scope: MfaScope, pathname: string): boolean {
+  return isExempt(
+    pathname,
+    scope === "platform_admin" ? PLATFORM_ADMIN_MFA_EXEMPT_PREFIXES : TENANT_MFA_EXEMPT_PREFIXES,
+  );
+}
+
 export function tenantRoleRequiresMfa(role: AppRole): boolean {
   return MFA_REQUIRED_TENANT_ROLES.includes(role);
 }
@@ -36,7 +49,7 @@ function isExempt(pathname: string, prefixes: readonly string[]): boolean {
  * layouts never gate, so a half-enrolled user is never locked in.
  */
 export function mfaEnrolmentRedirect(opts: {
-  scope: "tenant" | "platform_admin";
+  scope: MfaScope;
   role?: AppRole;
   twoFactorEnabled: boolean;
   pathname: string;
@@ -44,11 +57,11 @@ export function mfaEnrolmentRedirect(opts: {
   if (opts.twoFactorEnabled) return null;
 
   if (opts.scope === "platform_admin") {
-    if (isExempt(opts.pathname, PLATFORM_ADMIN_MFA_EXEMPT_PREFIXES)) return null;
-    return "/platform-admin/security";
+    if (isMfaEnrolmentPath(opts.scope, opts.pathname)) return null;
+    return mfaEnrolmentPath(opts.scope);
   }
 
   if (!opts.role || !tenantRoleRequiresMfa(opts.role)) return null;
-  if (isExempt(opts.pathname, TENANT_MFA_EXEMPT_PREFIXES)) return null;
-  return "/admin/security";
+  if (isMfaEnrolmentPath(opts.scope, opts.pathname)) return null;
+  return mfaEnrolmentPath(opts.scope);
 }
