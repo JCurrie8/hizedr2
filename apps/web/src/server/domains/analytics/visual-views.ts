@@ -1,4 +1,6 @@
 import type { PoolClient } from "@neondatabase/serverless";
+import type { AppRole } from "@hized/contracts";
+import { APP_ROLES } from "../access-control/membership-access";
 import { getPulseHierarchy, type KpiDirection, type KpiUnit, type PulseHierarchy } from "../pulse/kpis";
 
 export const ANALYTICS_SURFACES = ["pulse", "canvas"] as const;
@@ -24,6 +26,8 @@ export const ANALYTICS_VISUAL_TYPES = [
 ] as const;
 export const ANALYTICS_SOURCE_MODES = ["current", "children", "trend"] as const;
 export const ANALYTICS_HEIGHTS = ["compact", "standard", "tall"] as const;
+export const ANALYTICS_GRANT_TYPES = ["membership", "role", "org_node"] as const;
+export const ANALYTICS_GRANT_PERMISSIONS = ["view", "edit"] as const;
 
 export type AnalyticsSurface = (typeof ANALYTICS_SURFACES)[number];
 export type AnalyticsVisualType = (typeof ANALYTICS_VISUAL_TYPES)[number];
@@ -31,6 +35,23 @@ export type AnalyticsSourceMode = (typeof ANALYTICS_SOURCE_MODES)[number];
 export type AnalyticsWidgetHeight = (typeof ANALYTICS_HEIGHTS)[number];
 export type AnalyticsVisibility = "private" | "restricted" | "tenant";
 export type AnalyticsViewStatus = "draft" | "published" | "archived";
+export type AnalyticsGrantType = "membership" | "role" | "org_node";
+export type AnalyticsGrantPermission = "view" | "edit";
+
+export interface AnalyticsViewGrant {
+  id: string;
+  type: AnalyticsGrantType;
+  permission: AnalyticsGrantPermission;
+  targetId: string;
+  label: string;
+  detail: string;
+}
+
+export interface AnalyticsSharingOptions {
+  members: Array<{ id: string; label: string; detail: string }>;
+  roles: Array<{ id: AppRole; label: string }>;
+  organisationNodes: Array<{ id: string; label: string; detail: string }>;
+}
 
 export interface AnalyticsMetricReference {
   id: string;
@@ -327,6 +348,295 @@ export async function createAnalyticsView(
   return created;
 }
 
+function titleCase(value: string): string {
+  return value.split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+}
+
+export async function listAnalyticsSharingOptions(
+  client: PoolClient,
+  input: { tenantId: string; actorUserId: string },
+): Promise<AnalyticsSharingOptions> {
+  const [membersResult, nodesResult] = await Promise.all([
+    client.query<{
+      id: string;
+      full_name: string | null;
+      email: string;
+      role: AppRole;
+    }>(
+      `select membership.id, profile.full_name, auth_user.email, membership.role
+         from public.tenant_memberships membership
+         join public.profiles profile on profile.id = membership.user_id
+         join public."user" auth_user on auth_user.id = profile.auth_user_id
+        where membership.tenant_id = $1
+          and membership.status = 'active'
+          and membership.user_id <> $2
+        order by coalesce(nullif(profile.full_name, ''), auth_user.email), membership.id`,
+      [input.tenantId, input.actorUserId],
+    ),
+    client.query<{ id: string; name: string; node_type: string }>(
+      `select node.id, version.name, node.node_type
+         from public.org_nodes node
+         join public.org_node_versions version
+           on version.tenant_id = node.tenant_id
+          and version.org_node_id = node.id
+          and version.valid_from <= current_date
+          and (version.valid_to is null or version.valid_to > current_date)
+        where node.tenant_id = $1
+        order by version.path, node.id`,
+      [input.tenantId],
+    ),
+  ]);
+
+  return {
+    members: membersResult.rows.map((member) => ({
+      id: member.id,
+      label: member.full_name?.trim() || member.email,
+      detail: `${member.email} · ${titleCase(member.role)}`,
+    })),
+    roles: APP_ROLES.map((role) => ({ id: role, label: titleCase(role) })),
+    organisationNodes: nodesResult.rows.map((node) => ({
+      id: node.id,
+      label: node.name,
+      detail: titleCase(node.node_type),
+    })),
+  };
+}
+
+async function requireCanvasViewOwner(
+  client: PoolClient,
+  input: { tenantId: string; viewId: string; actorUserId: string; lock?: boolean },
+): Promise<void> {
+  const { rows: [view] } = await client.query<{ owner_user_id: string; surface: AnalyticsSurface }>(
+    `select owner_user_id, surface
+       from public.analytics_views
+      where tenant_id = $1 and id = $2${input.lock ? " for update" : ""}`,
+    [input.tenantId, input.viewId],
+  );
+  if (!view || view.surface !== "canvas" || view.owner_user_id !== input.actorUserId) {
+    throw new Error("Only the board owner can manage sharing.");
+  }
+}
+
+export async function listAnalyticsViewGrants(
+  client: PoolClient,
+  input: { tenantId: string; viewId: string; actorUserId: string },
+): Promise<AnalyticsViewGrant[]> {
+  await requireCanvasViewOwner(client, input);
+  const { rows } = await client.query<{
+    id: string;
+    grantee_type: AnalyticsGrantType;
+    permission: AnalyticsGrantPermission;
+    target_id: string;
+    label: string;
+    detail: string;
+  }>(
+    `select grant_row.id, grant_row.grantee_type, grant_row.permission,
+            case grant_row.grantee_type
+              when 'membership' then grant_row.grantee_membership_id::text
+              when 'role' then grant_row.grantee_role::text
+              else grant_row.grantee_org_node_id::text
+            end as target_id,
+            case grant_row.grantee_type
+              when 'membership' then coalesce(nullif(profile.full_name, ''), auth_user.email, 'Former member')
+              when 'role' then initcap(replace(grant_row.grantee_role::text, '_', ' '))
+              else coalesce(version.name, 'Inactive organisation area')
+            end as label,
+            case grant_row.grantee_type
+              when 'membership' then coalesce(auth_user.email, 'Membership is no longer active')
+              when 'role' then 'Company role'
+              else initcap(replace(node.node_type::text, '_', ' '))
+            end as detail
+       from public.analytics_view_grants grant_row
+       left join public.tenant_memberships membership
+         on membership.tenant_id = grant_row.tenant_id
+        and membership.id = grant_row.grantee_membership_id
+       left join public.profiles profile on profile.id = membership.user_id
+       left join public."user" auth_user on auth_user.id = profile.auth_user_id
+       left join public.org_nodes node
+         on node.tenant_id = grant_row.tenant_id
+        and node.id = grant_row.grantee_org_node_id
+       left join public.org_node_versions version
+         on version.tenant_id = node.tenant_id
+        and version.org_node_id = node.id
+        and version.valid_from <= current_date
+        and (version.valid_to is null or version.valid_to > current_date)
+      where grant_row.tenant_id = $1 and grant_row.view_id = $2
+        and grant_row.grantee_type in ('membership', 'role', 'org_node')
+      order by grant_row.grantee_type, label, grant_row.id`,
+    [input.tenantId, input.viewId],
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    type: row.grantee_type,
+    permission: row.permission,
+    targetId: row.target_id,
+    label: row.label,
+    detail: row.detail,
+  }));
+}
+
+export async function setAnalyticsViewGrant(
+  client: PoolClient,
+  input: {
+    tenantId: string;
+    viewId: string;
+    actorUserId: string;
+    type: AnalyticsGrantType;
+    targetId: string;
+    permission: AnalyticsGrantPermission;
+  },
+): Promise<{ id: string }> {
+  await requireCanvasViewOwner(client, { ...input, lock: true });
+
+  let targetColumn: "grantee_membership_id" | "grantee_role" | "grantee_org_node_id";
+  if (input.type === "membership") {
+    const target = await client.query(
+      `select 1 from public.tenant_memberships
+        where tenant_id = $1 and id = $2 and status = 'active' and user_id <> $3`,
+      [input.tenantId, input.targetId, input.actorUserId],
+    );
+    if (target.rowCount !== 1) throw new Error("Choose an active member of this company.");
+    targetColumn = "grantee_membership_id";
+  } else if (input.type === "org_node") {
+    const target = await client.query(
+      `select 1
+         from public.org_nodes node
+         join public.org_node_versions version
+           on version.tenant_id = node.tenant_id
+          and version.org_node_id = node.id
+          and version.valid_from <= current_date
+          and (version.valid_to is null or version.valid_to > current_date)
+        where node.tenant_id = $1 and node.id = $2`,
+      [input.tenantId, input.targetId],
+    );
+    if (target.rowCount !== 1) throw new Error("Choose an active organisation area you can access.");
+    targetColumn = "grantee_org_node_id";
+  } else {
+    if (!APP_ROLES.includes(input.targetId as AppRole)) throw new Error("Choose a valid company role.");
+    targetColumn = "grantee_role";
+  }
+
+  await client.query(
+    `delete from public.analytics_view_grants
+      where tenant_id = $1 and view_id = $2 and grantee_type = $3
+        and ${targetColumn}::text = $4`,
+    [input.tenantId, input.viewId, input.type, input.targetId],
+  );
+  const { rows: [created] } = await client.query<{ id: string }>(
+    `insert into public.analytics_view_grants
+       (tenant_id, view_id, grantee_type, ${targetColumn}, permission, created_by)
+     values ($1, $2, $3, $4, $5, $6)
+     returning id`,
+    [input.tenantId, input.viewId, input.type, input.targetId, input.permission, input.actorUserId],
+  );
+  await client.query(
+    `update public.analytics_views
+        set visibility = 'restricted', updated_by = $3, updated_at = now()
+      where tenant_id = $1 and id = $2`,
+    [input.tenantId, input.viewId, input.actorUserId],
+  );
+  if (!created) throw new Error("The sharing rule could not be saved.");
+  return created;
+}
+
+export async function removeAnalyticsViewGrant(
+  client: PoolClient,
+  input: { tenantId: string; viewId: string; grantId: string; actorUserId: string },
+): Promise<void> {
+  await requireCanvasViewOwner(client, { ...input, lock: true });
+  const deleted = await client.query(
+    `delete from public.analytics_view_grants
+      where tenant_id = $1 and view_id = $2 and id = $3`,
+    [input.tenantId, input.viewId, input.grantId],
+  );
+  if (deleted.rowCount !== 1) throw new Error("The sharing rule is unavailable.");
+  await client.query(
+    `update public.analytics_views view_row
+        set visibility = case
+              when exists (
+                select 1 from public.analytics_view_grants grant_row
+                 where grant_row.tenant_id = view_row.tenant_id
+                   and grant_row.view_id = view_row.id
+              ) then 'restricted'
+              else 'private'
+            end,
+            updated_by = $3,
+            updated_at = now()
+      where view_row.tenant_id = $1 and view_row.id = $2`,
+    [input.tenantId, input.viewId, input.actorUserId],
+  );
+}
+
+export async function duplicateAnalyticsView(
+  client: PoolClient,
+  input: { tenantId: string; viewId: string; actorUserId: string },
+): Promise<{ id: string }> {
+  const source = await getAnalyticsView(client, { tenantId: input.tenantId, viewId: input.viewId });
+  if (!source || source.surface !== "canvas") throw new Error("The Canvas board is unavailable.");
+  const copyName = `${source.name.slice(0, 115).trimEnd()} copy`;
+
+  const created = await createAnalyticsView(client, {
+    tenantId: input.tenantId,
+    surface: "canvas",
+    name: copyName,
+    description: source.description,
+    actorUserId: input.actorUserId,
+  });
+  // RLS may hide KPI references that the recipient cannot use. Duplicate
+  // only text panels and visuals that still have at least one permitted KPI;
+  // never smuggle an inaccessible definition into the new private board or
+  // create an invalid empty-metric visual.
+  const permittedWidgets = source.widgets.filter(
+    (widget) => widget.visualType === "text" || widget.metrics.length > 0,
+  );
+  for (const widget of permittedWidgets) {
+    const { rows: [copiedWidget] } = await client.query<{ id: string }>(
+      `insert into public.analytics_widgets
+         (tenant_id, view_id, title, subtitle, visual_type, source_mode,
+          position, width, height, configuration, static_text, created_by, updated_by)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $12)
+       returning id`,
+      [
+        input.tenantId,
+        created.id,
+        widget.title,
+        widget.subtitle,
+        widget.visualType,
+        widget.sourceMode,
+        widget.position,
+        widget.width,
+        widget.height,
+        JSON.stringify(widget.configuration),
+        widget.staticText,
+        input.actorUserId,
+      ],
+    );
+    if (!copiedWidget) throw new Error("A visual could not be duplicated.");
+    if (widget.metrics.length > 0) {
+      await client.query(
+        `insert into public.analytics_widget_metrics
+           (tenant_id, widget_id, kpi_definition_id, position, series_label)
+         select $1, $2, selected.kpi_definition_id, selected.position, selected.series_label
+           from jsonb_to_recordset($3::jsonb) as selected(
+             kpi_definition_id uuid,
+             position integer,
+             series_label text
+           )`,
+        [
+          input.tenantId,
+          copiedWidget.id,
+          JSON.stringify(widget.metrics.map((metric, position) => ({
+            kpi_definition_id: metric.id,
+            position,
+            series_label: metric.label === metric.name ? "" : metric.label,
+          }))),
+        ],
+      );
+    }
+  }
+  return created;
+}
+
 export async function updateAnalyticsView(
   client: PoolClient,
   input: {
@@ -338,6 +648,25 @@ export async function updateAnalyticsView(
     actorUserId: string;
   },
 ): Promise<void> {
+  const { rows: [current] } = await client.query<{
+    surface: AnalyticsSurface;
+    owner_user_id: string;
+    visibility: AnalyticsVisibility;
+  }>(
+    `select surface, owner_user_id, visibility
+       from public.analytics_views
+      where tenant_id = $1 and id = $2
+      for update`,
+    [input.tenantId, input.viewId],
+  );
+  if (!current) throw new Error("The view is unavailable or you cannot edit it.");
+  if (
+    current.surface === "canvas" &&
+    current.visibility !== input.visibility &&
+    current.owner_user_id !== input.actorUserId
+  ) {
+    throw new Error("Only the board owner can change sharing.");
+  }
   const result = await client.query(
     `update public.analytics_views
         set name = $3, description = $4, visibility = $5,
@@ -346,6 +675,13 @@ export async function updateAnalyticsView(
     [input.tenantId, input.viewId, input.name, input.description, input.visibility, input.actorUserId],
   );
   if (result.rowCount !== 1) throw new Error("The view is unavailable or you cannot edit it.");
+  if (current.surface === "canvas" && input.visibility !== "restricted") {
+    await client.query(
+      `delete from public.analytics_view_grants
+        where tenant_id = $1 and view_id = $2`,
+      [input.tenantId, input.viewId],
+    );
+  }
 }
 
 export async function publishAnalyticsView(
