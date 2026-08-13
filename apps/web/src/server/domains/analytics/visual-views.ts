@@ -28,6 +28,7 @@ export const ANALYTICS_SOURCE_MODES = ["current", "children", "trend"] as const;
 export const ANALYTICS_HEIGHTS = ["compact", "standard", "tall"] as const;
 export const ANALYTICS_GRANT_TYPES = ["membership", "role", "org_node"] as const;
 export const ANALYTICS_GRANT_PERMISSIONS = ["view", "edit"] as const;
+export const ANALYTICS_REPORTING_PERIODS = [1, 3, 6, 12] as const;
 
 export type AnalyticsSurface = (typeof ANALYTICS_SURFACES)[number];
 export type AnalyticsVisualType = (typeof ANALYTICS_VISUAL_TYPES)[number];
@@ -37,6 +38,14 @@ export type AnalyticsVisibility = "private" | "restricted" | "tenant";
 export type AnalyticsViewStatus = "draft" | "published" | "archived";
 export type AnalyticsGrantType = "membership" | "role" | "org_node";
 export type AnalyticsGrantPermission = "view" | "edit";
+export type AnalyticsReportingPeriods = (typeof ANALYTICS_REPORTING_PERIODS)[number];
+
+export function parseAnalyticsReportingPeriods(value: string | null | undefined): AnalyticsReportingPeriods {
+  const parsed = Number(value);
+  return ANALYTICS_REPORTING_PERIODS.includes(parsed as AnalyticsReportingPeriods)
+    ? parsed as AnalyticsReportingPeriods
+    : 12;
+}
 
 export interface AnalyticsViewGrant {
   id: string;
@@ -116,6 +125,9 @@ export interface AnalyticsViewRuntime {
   view: AnalyticsViewDetail;
   hierarchy: PulseHierarchy | null;
   values: AnalyticsValuePoint[];
+  filterContext: {
+    reportingPeriods: AnalyticsReportingPeriods;
+  };
 }
 
 export interface AnalyticsMetricOption extends AnalyticsMetricReference {
@@ -883,7 +895,12 @@ export async function resizeAnalyticsWidget(
 
 export async function loadAnalyticsViewRuntime(
   client: PoolClient,
-  input: { tenantId: string; viewId: string; requestedOrgNodeId?: string | null },
+  input: {
+    tenantId: string;
+    viewId: string;
+    requestedOrgNodeId?: string | null;
+    reportingPeriods?: AnalyticsReportingPeriods;
+  },
 ): Promise<AnalyticsViewRuntime | null> {
   const view = await getAnalyticsView(client, { tenantId: input.tenantId, viewId: input.viewId });
   if (!view) return null;
@@ -895,7 +912,10 @@ export async function loadAnalyticsViewRuntime(
   const organisationIds = hierarchy
     ? [hierarchy.selected.id, ...hierarchy.children.map((child) => child.id)]
     : [];
-  if (metricIds.length === 0 || organisationIds.length === 0) return { view, hierarchy, values: [] };
+  const reportingPeriods = input.reportingPeriods ?? 12;
+  if (metricIds.length === 0 || organisationIds.length === 0) {
+    return { view, hierarchy, values: [], filterContext: { reportingPeriods } };
+  }
 
   const { rows } = await client.query(
     `with ranked as (
@@ -924,13 +944,14 @@ export async function loadAnalyticsViewRuntime(
           and value.org_node_id = any($3::uuid[])
           and definition.approval_status = 'approved'
      )
-     select * from ranked where recency_rank <= 12
+     select * from ranked where recency_rank <= $4
      order by metric_name, organisation_name, period_end`,
-    [input.tenantId, metricIds, organisationIds],
+    [input.tenantId, metricIds, organisationIds, reportingPeriods],
   );
   return {
     view,
     hierarchy,
+    filterContext: { reportingPeriods },
     values: rows.map((row) => ({
       metricId: row.kpi_definition_id,
       metricName: row.metric_name,

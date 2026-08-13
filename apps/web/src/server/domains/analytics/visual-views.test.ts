@@ -9,6 +9,8 @@ import {
   getAnalyticsView,
   listAnalyticsSharingOptions,
   listAnalyticsViewGrants,
+  loadAnalyticsViewRuntime,
+  parseAnalyticsReportingPeriods,
   publishAnalyticsView,
   removeAnalyticsViewGrant,
   setAnalyticsViewGrant,
@@ -100,6 +102,18 @@ describe("Canvas sharing and duplication", () => {
       [owner.tenantId, dataset.id, owner.profileId],
     );
     metricId = metric.id;
+    await admin.query(
+      `insert into public.kpi_values
+         (tenant_id, kpi_definition_id, org_node_id, period_start, period_end,
+          actual_value, target_value, prior_period_value, source_refreshed_at, calculated_by)
+       select $1, $2, $3,
+              current_date - ((series.period_offset + 1) * 7),
+              current_date - (series.period_offset * 7),
+              120 - series.period_offset, 115, 118 - series.period_offset,
+              now(), $4
+         from generate_series(0, 11) as series(period_offset)`,
+      [owner.tenantId, metricId, companyNodeId, owner.profileId],
+    );
     const { rows: [adminOnlyMetric] } = await admin.query<{ id: string }>(
       `insert into public.kpi_definitions
          (tenant_id, dataset_id, kpi_key, version_number, name, definition,
@@ -166,6 +180,27 @@ describe("Canvas sharing and duplication", () => {
       expect.objectContaining({ id: companyNodeId, label: "Canvas Sharing Company" }),
     ]);
     expect(options.roles.map((role) => role.id)).toContain("manager");
+  });
+
+  it("applies a validated global reporting window before visual data reaches the renderer", async () => {
+    const viewId = await createBoard("Filtered operations");
+    const runtime = await withUserContext(
+      { userId: owner.profileId, tenantId: owner.tenantId },
+      (client) => loadAnalyticsViewRuntime(client, {
+        tenantId: owner.tenantId,
+        viewId,
+        reportingPeriods: 3,
+      }),
+    );
+
+    expect(runtime?.filterContext).toEqual({ reportingPeriods: 3 });
+    expect(runtime?.values).toHaveLength(3);
+    expect(runtime?.values.map((row) => row.periodEnd)).toEqual(
+      [...(runtime?.values ?? [])].map((row) => row.periodEnd).sort(),
+    );
+    expect(parseAnalyticsReportingPeriods("6")).toBe(6);
+    expect(parseAnalyticsReportingPeriods("999")).toBe(12);
+    expect(parseAnalyticsReportingPeriods("anything")).toBe(12);
   });
 
   it("shares a published board with a named member without widening ownership", async () => {
