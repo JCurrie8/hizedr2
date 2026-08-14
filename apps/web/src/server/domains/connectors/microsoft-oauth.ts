@@ -1,8 +1,14 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  openConnectorValue,
+  sealConnectorValue,
+  type SealedValue,
+} from "./credential-crypto";
+
+export type { SealedValue } from "./credential-crypto";
 
 const AUTHORIZE_URL = "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize";
 const TOKEN_URL = "https://login.microsoftonline.com/organizations/oauth2/v2.0/token";
-const KEY_VERSION = 1;
 const STATE_TTL_MS = 10 * 60 * 1_000;
 const SCOPES = ["offline_access", "User.Read", "Files.Read.All", "Sites.Read.All"];
 
@@ -12,13 +18,6 @@ export interface MicrosoftCredentials {
   expiresAt: string;
   scope: string;
   tokenType: string;
-}
-
-export interface SealedValue {
-  ciphertext: Buffer;
-  iv: Buffer;
-  authTag: Buffer;
-  keyVersion: number;
 }
 
 export interface MicrosoftOAuthState {
@@ -47,38 +46,6 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function masterKey(): Buffer {
-  const encoded = requiredEnv("CONNECTOR_ENCRYPTION_KEY");
-  const key = Buffer.from(encoded, "base64");
-  if (key.byteLength !== 32) throw new Error("CONNECTOR_ENCRYPTION_KEY must be a base64-encoded 32-byte key.");
-  return key;
-}
-
-function purposeKey(purpose: "credentials" | "oauth-state"): Buffer {
-  return createHmac("sha256", masterKey()).update(`hized:${purpose}:v${KEY_VERSION}`).digest();
-}
-
-function sealJson(value: unknown, purpose: "credentials" | "oauth-state", aad: string): SealedValue {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", purposeKey(purpose), iv);
-  cipher.setAAD(Buffer.from(aad, "utf8"));
-  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-  return { ciphertext, iv, authTag: cipher.getAuthTag(), keyVersion: KEY_VERSION };
-}
-
-function openJson<T>(sealed: SealedValue, purpose: "credentials" | "oauth-state", aad: string): T {
-  if (sealed.keyVersion !== KEY_VERSION) throw new Error("The connector secret uses an unsupported key version.");
-  try {
-    const decipher = createDecipheriv("aes-256-gcm", purposeKey(purpose), sealed.iv);
-    decipher.setAAD(Buffer.from(aad, "utf8"));
-    decipher.setAuthTag(sealed.authTag);
-    const plaintext = Buffer.concat([decipher.update(sealed.ciphertext), decipher.final()]);
-    return JSON.parse(plaintext.toString("utf8")) as T;
-  } catch {
-    throw new Error("The connector secret could not be authenticated.");
-  }
-}
-
 export function microsoftConnectorEnvironmentReady(): boolean {
   return ["MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "MICROSOFT_REDIRECT_URI", "CONNECTOR_ENCRYPTION_KEY"]
     .every((name) => Boolean(process.env[name]));
@@ -88,14 +55,14 @@ export function sealMicrosoftCredentials(
   credentials: MicrosoftCredentials,
   binding: { tenantId: string; connectorId: string },
 ): SealedValue {
-  return sealJson(credentials, "credentials", `${binding.tenantId}:${binding.connectorId}`);
+  return sealConnectorValue(credentials, "credentials", `${binding.tenantId}:${binding.connectorId}`);
 }
 
 export function openMicrosoftCredentials(
   sealed: SealedValue,
   binding: { tenantId: string; connectorId: string },
 ): MicrosoftCredentials {
-  const credentials = openJson<MicrosoftCredentials>(sealed, "credentials", `${binding.tenantId}:${binding.connectorId}`);
+  const credentials = openConnectorValue<MicrosoftCredentials>(sealed, "credentials", `${binding.tenantId}:${binding.connectorId}`);
   if (!credentials.accessToken || !credentials.refreshToken || !credentials.expiresAt) {
     throw new Error("The Microsoft credential payload is incomplete.");
   }
@@ -109,14 +76,14 @@ export function createMicrosoftOAuthState(input: Omit<MicrosoftOAuthState, "nonc
     codeVerifier: randomBytes(32).toString("base64url"),
     expiresAt: Date.now() + STATE_TTL_MS,
   };
-  const sealed = sealJson(state, "oauth-state", "microsoft-oauth-state");
+  const sealed = sealConnectorValue(state, "oauth-state", "microsoft-oauth-state");
   return [sealed.keyVersion, sealed.iv.toString("base64url"), sealed.authTag.toString("base64url"), sealed.ciphertext.toString("base64url")].join(".");
 }
 
 export function openMicrosoftOAuthState(value: string): MicrosoftOAuthState {
   const [version, iv, authTag, ciphertext, ...extra] = value.split(".");
   if (!version || !iv || !authTag || !ciphertext || extra.length > 0) throw new Error("The Microsoft authorization state is invalid.");
-  const state = openJson<MicrosoftOAuthState>({
+  const state = openConnectorValue<MicrosoftOAuthState>({
     keyVersion: Number(version),
     iv: Buffer.from(iv, "base64url"),
     authTag: Buffer.from(authTag, "base64url"),

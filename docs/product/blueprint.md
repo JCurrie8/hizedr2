@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.5 |
+| Document status | Build-ready product definition — Version 2.6 |
 
 ### Changes since v1.0
 
@@ -103,6 +103,12 @@ This specification is designed to be handed to an AI software builder, technical
 - **Dimensions are governed reusable business concepts.** Company Admins and Analysts publish tenant-wide product, customer, geography, organisation or custom dimensions with controlled member keys and display labels, then explicitly link compatible dimensions to each KPI definition. A KPI slice using an unlinked dimension, retired member or arbitrary query value must fail closed.
 - **Global filter compatibility is explicit.** The default dashboard result remains the approved unsliced aggregate. Selecting a governed member replaces that aggregate only for KPIs linked to the dimension; unrelated widgets retain their approved total rather than disappearing or mixing differently grained rows.
 - **Record drill-through never opens raw curated storage.** Connect's curated records remain operator-only. Pulse and Canvas may expose a separate projection containing only fields present in the dataset catalogue and marked non-sensitive, and only when that projection is linked to a KPI value the current user can read under tenant, role and organisation RLS. Sensitive projection attempts are rejected; sensitive drill-through actions and all exports remain audited.
+
+### Changes since v2.5
+
+- **Activ8 is the first real customer-onboarding proof, not a fork of the product.** The pilot prioritises repeatable Salesforce and analyst-delivered CSV/XLSX pipelines feeding the same tenant-isolated Connect, Pulse and Canvas contracts that later customers use. Client-specific matching or transformation remains versioned Custom ETL; no Activ8-only application branch, schema or executable upload path is permitted.
+- **Manual replacement is an explicit, guarded SQL operation.** Snapshot CSV/XLSX refreshes require the operator to confirm replacement and show the current row count. Hized replaces the governed dataset only after the incoming revision has been parsed and accepted; an empty or fully quarantined revision preserves the current dataset and records a failed run rather than silently erasing reporting data.
+- **The first Salesforce runtime profile is deliberately bounded.** Company Admins save dedicated integration-user client credentials; analysts discover permitted scalar objects/fields and configure per-object pipelines. Runs use REST `queryAll`, stable `Id` upsert, `SystemModstamp`/fallback watermarking, persisted high-water marks, a 24-hour overlap, deletion tombstones, immutable extracts and per-object leases. Extracts above the bounded REST threshold require a narrower bootstrap until Bulk API 2.0 is implemented through the same run contract.
 
 ## 1. Product definition and positioning
 
@@ -336,6 +342,7 @@ Connections and pipelines are separate concepts. A Company Admin authorises a co
 
 - Full and incremental extraction using watermark columns, timestamps, IDs or source change tracking.
 - Salesforce defaults to `SystemModstamp` (or the platform replication fallback where unavailable), a stable record ID upsert key, and a configurable rolling overlap such as the previous 24 hours. Small extracts can use REST pagination; high-volume extracts can use Bulk API 2.0 without changing downstream run semantics.
+- The initial hosted Salesforce adapter caps one REST extraction at 100,000 records and 250 selected scalar fields. An operator must use a bounded bootstrap window when that cap is reached; Bulk API 2.0 is the planned high-volume transport and must not alter checkpoint, validation, lineage, tombstone or curated-upsert semantics.
 - Zendesk uses cursor-based incremental exports where supported, persists the final `after_cursor` only when `end_of_stream` is reached, retains deletion state, and honours endpoint rate-limit / retry headers.
 - Configurable schedules with tenant time zone support.
 - Idempotent loads and safe retry behaviour.
@@ -345,6 +352,7 @@ Connections and pipelines are separate concepts. A Company Admin authorises a co
 - Cumulative Forms workbooks support a configured stable response key and upsert semantics, so re-reading the latest workbook adds or updates responses rather than appending the full sheet again.
 - Raw landing, staging and curated transformation layers.
 - Hized-managed tenant-isolated SQL is the standard landing/curated destination for every adapter. A source workbook or form remains a delivery mechanism, not the long-term reporting database; a customer-owned SQL Server or warehouse is optional rather than a prerequisite.
+- A manual snapshot replacement is destructive only after explicit operator confirmation and a successful non-empty accepted parse. The UI exposes the number of current governed rows to be replaced; an empty or fully quarantined upload leaves the previous SQL dataset intact.
 - Data type mapping, column renaming, filtering, joins, calculated fields and deduplication.
 - Validation rules for nulls, uniqueness, ranges, accepted values, referential integrity and row-count variance.
 - Quarantine area for rejected rows with reason codes and reprocessing.
@@ -713,7 +721,7 @@ This requirement is delivered progressively by the epic that owns each schema. E
 > - A. Repository, environments, design system, authentication and tenancy.
 > - B. Organisation hierarchy, users, roles and row-level scope.
 > - C. Platform admin tenant provisioning, cross-tenant list and audit trail (PLATFORM-001/002/003).
-> - D. SQL Server plus CSV/Excel connectors, pipeline scheduling, run logging and validation.
+> - D. CSV/Excel plus pilot-priority source connectors, pipeline scheduling, run logging and validation. Salesforce is first for the Activ8 pilot; reusable SQL Server/Azure SQL extraction remains required and follows evidence from the pilot source inventory.
 > - E. Curated dataset metadata and KPI catalogue.
 > - F. Executive-to-employee dashboards, filters, targets, drill-through and Canvas self-serve board building.
 > - G. Alerts, scheduled reports, audit and production hardening.

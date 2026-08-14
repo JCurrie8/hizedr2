@@ -9,13 +9,17 @@ import {
 } from "@/server/domains/connectors/connectors";
 import { microsoftConnectorEnvironmentReady } from "@/server/domains/connectors/microsoft-oauth";
 import { listMicrosoftConnectors } from "@/server/domains/connectors/sharepoint-connectors";
+import { listSalesforceConnectors } from "@/server/domains/connectors/salesforce-connectors";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { redirect } from "next/navigation";
 import {
   beginMicrosoftConnectionAction,
   configureMicrosoftWorkbookAction,
+  createSalesforceConnectionAction,
   createManualFilePipelineAction,
+  refreshSalesforceCatalogAction,
+  syncSalesforcePipelineAction,
   syncMicrosoftWorkbookAction,
 } from "./actions";
 import { ManualUploadForm } from "./ManualUploadForm";
@@ -41,11 +45,19 @@ export default async function ConnectPage() {
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
+        const [connectors, filePipelines, microsoftConnectors, salesforceConnectors, recentRuns] = await Promise.all([
+          listConnectorOverview(client, { tenantId: ctx.tenant.id }),
+          listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
+          listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
+          listSalesforceConnectors(client, { tenantId: ctx.tenant.id }),
+          listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
+        ]);
         return {
-          connectors: await listConnectorOverview(client, { tenantId: ctx.tenant.id }),
-          filePipelines: await listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
-          microsoftConnectors: await listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
-          recentRuns: await listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
+          connectors,
+          filePipelines,
+          microsoftConnectors,
+          salesforceConnectors,
+          recentRuns,
         };
       },
     ),
@@ -53,12 +65,18 @@ export default async function ConnectPage() {
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   if (!connectData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
-  const { connectors, filePipelines, microsoftConnectors, recentRuns } = connectData;
+  const { connectors, filePipelines, microsoftConnectors, salesforceConnectors, recentRuns } = connectData;
   const pipelineHref = (pipelineId: string) => tenantAppUrl({
     slug: ctx.tenant.slug,
     host,
     protocol,
     path: `/admin/connect/pipelines/${pipelineId}`,
+  });
+  const salesforceHref = (connectorId: string) => tenantAppUrl({
+    slug: ctx.tenant.slug,
+    host,
+    protocol,
+    path: `/admin/connect/salesforce/${connectorId}`,
   });
 
   return (
@@ -89,6 +107,89 @@ export default async function ConnectPage() {
             <p className="mt-2 text-sm text-muted">{description}</p>
           </div>
         ))}
+      </section>
+
+      <section className="mt-8 rounded-lg border border-line bg-panel p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="font-display text-lg font-semibold text-ink">Salesforce</h2>
+            <p className="mt-1 max-w-3xl text-sm text-muted">
+              Connect a dedicated API-only integration user, discover its permitted objects and fields, then create independently monitored Id-upsert pipelines with a real 24-hour overlap.
+            </p>
+          </div>
+          <span className="rounded bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-deep">Reusable CRM adapter</span>
+        </div>
+
+        {ctx.role === "company_admin" && (
+          <form action={createSalesforceConnectionAction} className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Connection name
+              <input name="name" required minLength={2} maxLength={100} placeholder="Activ8 Salesforce" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Salesforce My Domain
+              <input name="myDomainUrl" required type="url" placeholder="https://company.my.salesforce.com" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Consumer key
+              <input name="clientId" required minLength={10} maxLength={500} autoComplete="off" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Consumer secret
+              <input name="clientSecret" required type="password" minLength={10} maxLength={500} autoComplete="new-password" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              API version (optional)
+              <input name="apiVersion" pattern="[0-9]{2}\\.0" placeholder="Auto-select newest available" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <div className="flex items-end">
+              <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Test and save Salesforce</button>
+            </div>
+            <p className="text-xs text-muted md:col-span-2">The secret is encrypted before Postgres and bound to this tenant and connector. Hized recommends a dedicated Salesforce integration user with only the object and field permissions required for analytics.</p>
+          </form>
+        )}
+
+        {salesforceConnectors.length > 0 && (
+          <div className="mt-6 space-y-4">
+            {salesforceConnectors.map((connector) => (
+              <div key={connector.id} className="rounded-md border border-line bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-ink">{connector.name}</h3>
+                    <p className="mt-1 text-xs text-muted">{connector.myDomainUrl} · API v{connector.apiVersion} · {connector.catalog.length} queryable objects</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <form action={refreshSalesforceCatalogAction}>
+                      <input type="hidden" name="connectorId" value={connector.id} />
+                      <button type="submit" className="rounded border border-line px-3 py-2 text-sm font-semibold text-teal-deep">Refresh objects</button>
+                    </form>
+                    <Link href={salesforceHref(connector.id)} className="rounded bg-teal-deep px-3 py-2 text-sm font-semibold text-white">Add object pipeline</Link>
+                  </div>
+                </div>
+                {connector.pipelines.length > 0 ? (
+                  <div className="mt-4 divide-y divide-line rounded border border-line">
+                    {connector.pipelines.map((pipeline) => (
+                      <div key={pipeline.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+                        <div className="text-sm text-muted">
+                          <div><strong className="font-medium text-ink">{pipeline.name}</strong> · {pipeline.objectName}</div>
+                          <div className="mt-1 text-xs">Every {pipeline.pollIntervalMinutes === 1440 ? "day" : `${pipeline.pollIntervalMinutes / 60} hours`} · {pipeline.lastSuccessAt ? `last successful ${new Date(pipeline.lastSuccessAt).toLocaleString("en-GB")}` : "not run yet"}</div>
+                          {pipeline.lastError && <div className="mt-1 text-xs font-medium text-red-700">{pipeline.lastError}</div>}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Link href={pipelineHref(pipeline.id)} className="rounded border border-line px-3 py-2 text-sm font-semibold text-teal-deep">Configure</Link>
+                          <form action={syncSalesforcePipelineAction}>
+                            <input type="hidden" name="pipelineId" value={pipeline.id} />
+                            <button type="submit" className="rounded bg-navy px-3 py-2 text-sm font-semibold text-white">Refresh now</button>
+                          </form>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : <p className="mt-4 text-sm text-muted">Connection tested. Add the first Salesforce object pipeline to begin the Activ8 bootstrap.</p>}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="mt-8 rounded-lg border border-line bg-panel p-5">
@@ -218,7 +319,7 @@ export default async function ConnectPage() {
         </p>
         {filePipelines.length > 0
           ? <>
-              <ManualUploadForm pipelines={filePipelines.map(({ id, name, loadMode }) => ({ id, name, loadMode }))} />
+              <ManualUploadForm pipelines={filePipelines.map(({ id, name, loadMode, recordCount }) => ({ id, name, loadMode, recordCount }))} />
               <div className="mt-4 flex flex-wrap gap-2">
                 {filePipelines.map((pipeline) => (
                   <Link key={pipeline.id} href={pipelineHref(pipeline.id)} className="rounded border border-line bg-white px-3 py-2 text-sm font-medium text-teal-deep">

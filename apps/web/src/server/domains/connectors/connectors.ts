@@ -20,6 +20,7 @@ export interface ManualFilePipeline {
   loadMode: LoadMode;
   keyColumns: string[];
   fieldMappings: PipelineFieldMapping[];
+  recordCount: number;
 }
 
 export interface PipelineRunOverview {
@@ -115,7 +116,9 @@ export async function listManualFilePipelines(
   input: { tenantId: string },
 ): Promise<ManualFilePipeline[]> {
   const { rows } = await client.query(
-    `select p.id, p.connector_id, p.name, p.load_mode, p.key_columns
+    `select p.id, p.connector_id, p.name, p.load_mode, p.key_columns,
+            (select count(*)::integer from public.curated_records cr
+             where cr.pipeline_id = p.id and cr.tenant_id = p.tenant_id) as record_count
      from public.pipelines p
      join public.connectors c
        on c.id = p.connector_id and c.tenant_id = p.tenant_id
@@ -133,6 +136,7 @@ export async function listManualFilePipelines(
     loadMode: row.load_mode,
     keyColumns: row.key_columns,
     fieldMappings: [],
+    recordCount: row.record_count,
   }));
 }
 
@@ -141,7 +145,9 @@ export async function getManualFilePipeline(
   input: { tenantId: string; pipelineId: string },
 ): Promise<ManualFilePipeline> {
   const { rows: [row] } = await client.query(
-    `select p.id, p.connector_id, p.name, p.load_mode, p.key_columns
+    `select p.id, p.connector_id, p.name, p.load_mode, p.key_columns,
+            (select count(*)::integer from public.curated_records cr
+             where cr.pipeline_id = p.id and cr.tenant_id = p.tenant_id) as record_count
      from public.pipelines p
      join public.connectors c
        on c.id = p.connector_id and c.tenant_id = p.tenant_id
@@ -161,6 +167,7 @@ export async function getManualFilePipeline(
     loadMode: row.load_mode,
     keyColumns: row.key_columns,
     fieldMappings,
+    recordCount: row.record_count,
   };
 }
 
@@ -192,7 +199,7 @@ export async function listRecentPipelineRuns(
 
 export interface TabularFileSourceInput {
   tenantId: string;
-  pipeline: ManualFilePipeline;
+  pipeline: Pick<ManualFilePipeline, "id" | "connectorId" | "name" | "loadMode" | "keyColumns" | "fieldMappings">;
   fileName: string;
   contentType: string;
   contentSha256: string;
@@ -203,30 +210,44 @@ export interface TabularFileSourceInput {
   sourcePath?: string | null;
   sourceETag?: string | null;
   sourceCTag?: string | null;
+  batchKind?: "file_revision" | "api_extract";
+  windowStartedAt?: string | null;
+  windowEndedAt?: string | null;
+  cursorStart?: Record<string, unknown> | null;
+  cursorEnd?: Record<string, unknown> | null;
   triggerType?: "manual_upload" | "manual_sync" | "schedule" | "webhook" | "retry" | "backfill";
   sourceMetadata?: Record<string, unknown>;
+  deletionField?: string;
+  allowEmptySnapshot?: boolean;
 }
 
-async function resolveManualFileBatch(
+async function resolveSourceBatch(
   client: PoolClient,
   input: TabularFileSourceInput & { metadata: Record<string, unknown> },
 ): Promise<{ id: string; reused: boolean }> {
   const { rows: insertedBatches } = await client.query(
     `insert into public.source_batches
        (tenant_id, connector_id, batch_kind, source_item_id, source_path, source_name,
-        source_etag, source_ctag, source_modified_at, content_sha256, content_type, size_bytes, storage_key, metadata)
-     values ($1, $2, 'file_revision', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+        source_etag, source_ctag, source_modified_at, window_started_at, window_ended_at,
+        cursor_start, cursor_end, content_sha256, content_type, size_bytes, storage_key, metadata)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+             $12::jsonb, $13::jsonb, $14, $15, $16, $17, $18::jsonb)
      on conflict (connector_id, source_item_id, content_sha256) do nothing
      returning id`,
     [
       input.tenantId,
       input.pipeline.connectorId,
+      input.batchKind ?? "file_revision",
       input.sourceItemId ?? input.fileName,
       input.sourcePath ?? null,
       input.fileName,
       input.sourceETag ?? null,
       input.sourceCTag ?? null,
       input.sourceModifiedAt,
+      input.windowStartedAt ?? null,
+      input.windowEndedAt ?? null,
+      JSON.stringify(input.cursorStart ?? null),
+      JSON.stringify(input.cursorEnd ?? null),
       input.contentSha256,
       input.contentType,
       input.sizeBytes,
@@ -267,8 +288,8 @@ export async function persistManualFileRun(
     actorUserId: string;
     table: ParsedTable;
   },
-): Promise<{ runId: string; status: "succeeded" | "warning"; duplicate: boolean; sourceObjectReused: boolean; acceptedRows: number; rejectedRows: number }> {
-  const sourceBatch = await resolveManualFileBatch(client, {
+): Promise<{ runId: string; status: "succeeded" | "warning"; duplicate: boolean; sourceObjectReused: boolean; acceptedRows: number; rejectedRows: number; rowsReplaced: number }> {
+  const sourceBatch = await resolveSourceBatch(client, {
     ...input,
     metadata: { ...input.sourceMetadata, sheetName: input.table.sheetName, headers: input.table.headers },
   });
@@ -282,6 +303,7 @@ export async function persistManualFileRun(
       sourceObjectReused: sourceBatch.reused,
       acceptedRows: existingRun.rows_accepted,
       rejectedRows: existingRun.rows_rejected,
+      rowsReplaced: 0,
     };
   }
 
@@ -293,6 +315,9 @@ export async function persistManualFileRun(
     fieldMappings: input.pipeline.fieldMappings,
   });
   const status = prepared.rejectedRows > 0 ? "warning" : "succeeded";
+  if (input.pipeline.loadMode === "snapshot" && prepared.curatedRecords.length === 0 && !input.allowEmptySnapshot) {
+    throw new Error("A replacement file must contain at least one accepted row; the current dataset was preserved.");
+  }
   const { rows: [run] } = await client.query(
     `insert into public.pipeline_runs
        (tenant_id, pipeline_id, connector_id, source_batch_id, trigger_type,
@@ -339,31 +364,45 @@ export async function persistManualFileRun(
     );
   }
 
+  let rowsReplaced = 0;
   if (input.pipeline.loadMode === "snapshot") {
+    const { rows: [count] } = await client.query(
+      "select count(*)::integer as count from public.curated_records where pipeline_id = $1",
+      [input.pipeline.id],
+    );
+    rowsReplaced = count.count;
     await client.query("delete from public.curated_records where pipeline_id = $1", [input.pipeline.id]);
   }
   if (prepared.curatedRecords.length > 0) {
+    const curatedRecords = prepared.curatedRecords.map((row) => {
+      const isDeleted = input.deletionField ? row.data[input.deletionField] === true : false;
+      return {
+        record_key: row.recordKey,
+        row_number: row.rowNumber,
+        data: row.data,
+        is_deleted: isDeleted,
+      };
+    });
     await client.query(
       `insert into public.curated_records
-         (tenant_id, pipeline_id, record_key, data, source_run_id, source_row_number)
-       select $1, $2, item.record_key, item.data, $3, item.row_number
-       from jsonb_to_recordset($4::jsonb) as item(record_key text, row_number integer, data jsonb)
+         (tenant_id, pipeline_id, record_key, data, is_deleted, deleted_at, source_run_id, source_row_number)
+       select $1, $2, item.record_key, item.data, item.is_deleted,
+              case when item.is_deleted then now() else null end, $3, item.row_number
+       from jsonb_to_recordset($4::jsonb) as item(
+         record_key text, row_number integer, data jsonb, is_deleted boolean
+       )
        on conflict (pipeline_id, record_key) do update set
          data = excluded.data,
          source_run_id = excluded.source_run_id,
          source_row_number = excluded.source_row_number,
-         is_deleted = false,
-         deleted_at = null,
+         is_deleted = excluded.is_deleted,
+         deleted_at = excluded.deleted_at,
          last_seen_at = now()`,
       [
         input.tenantId,
         input.pipeline.id,
         run.id,
-        JSON.stringify(prepared.curatedRecords.map((row) => ({
-          record_key: row.recordKey,
-          row_number: row.rowNumber,
-          data: row.data,
-        }))),
+        JSON.stringify(curatedRecords),
       ],
     );
   }
@@ -413,6 +452,7 @@ export async function persistManualFileRun(
     sourceObjectReused: sourceBatch.reused,
     acceptedRows: prepared.curatedRecords.length,
     rejectedRows: prepared.rejectedRows,
+    rowsReplaced,
   };
 }
 
@@ -420,7 +460,7 @@ export async function persistManualFileFailure(
   client: PoolClient,
   input: TabularFileSourceInput & { actorUserId: string; errorMessage: string },
 ): Promise<{ runId: string; duplicate: boolean; sourceObjectReused: boolean }> {
-  const sourceBatch = await resolveManualFileBatch(client, {
+  const sourceBatch = await resolveSourceBatch(client, {
     ...input,
     metadata: { ...input.sourceMetadata, processingError: input.errorMessage },
   });

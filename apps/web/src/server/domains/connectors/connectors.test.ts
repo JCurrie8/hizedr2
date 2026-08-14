@@ -179,4 +179,84 @@ describe("manual file pipeline persistence", () => {
       expect(new Set(rows.map((row) => row.status))).toEqual(new Set(["failed", "succeeded"]));
     });
   });
+
+  it("replaces snapshots explicitly but preserves the current SQL dataset for an empty accepted revision", async () => {
+    const created = await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      async (client) => {
+        const result = await createManualFilePipeline(client, {
+          tenantId: fixture.tenantId,
+          createdBy: fixture.profileId,
+          name: "Replaceable daily snapshot",
+          loadMode: "snapshot",
+          keyColumns: [],
+        });
+        const pipeline = await getManualFilePipeline(client, { tenantId: fixture.tenantId, pipelineId: result.pipelineId });
+        const first = await persistManualFileRun(client, {
+          tenantId: fixture.tenantId,
+          actorUserId: fixture.profileId,
+          pipeline,
+          fileName: "daily.csv",
+          contentType: "text/csv",
+          contentSha256: "1".repeat(64),
+          sizeBytes: 50,
+          storageKey: `${fixture.tenantId}/connect/test/daily-v1.csv`,
+          sourceModifiedAt: "2026-08-14T08:00:00.000Z",
+          table: {
+            sourceName: "daily.csv",
+            sheetName: null,
+            headers: ["Code", "Value"],
+            rows: [{ Code: "old-a", Value: 1 }, { Code: "old-b", Value: 2 }],
+          },
+        });
+        expect(first.rowsReplaced).toBe(0);
+        return pipeline;
+      },
+    );
+
+    await expect(withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => persistManualFileRun(client, {
+        tenantId: fixture.tenantId,
+        actorUserId: fixture.profileId,
+        pipeline: created,
+        fileName: "daily.csv",
+        contentType: "text/csv",
+        contentSha256: "2".repeat(64),
+        sizeBytes: 20,
+        storageKey: `${fixture.tenantId}/connect/test/daily-empty.csv`,
+        sourceModifiedAt: "2026-08-14T09:00:00.000Z",
+        table: { sourceName: "daily.csv", sheetName: null, headers: ["Code", "Value"], rows: [] },
+      }),
+    )).rejects.toThrow(/current dataset was preserved/);
+
+    await withUserContext({ userId: fixture.profileId, tenantId: fixture.tenantId }, async (client) => {
+      const before = await client.query(
+        "select data from public.curated_records where pipeline_id = $1 order by source_row_number",
+        [created.id],
+      );
+      expect(before.rows.map((row) => row.data.Code)).toEqual(["old-a", "old-b"]);
+
+      const replacement = await persistManualFileRun(client, {
+        tenantId: fixture.tenantId,
+        actorUserId: fixture.profileId,
+        pipeline: created,
+        fileName: "daily.csv",
+        contentType: "text/csv",
+        contentSha256: "3".repeat(64),
+        sizeBytes: 30,
+        storageKey: `${fixture.tenantId}/connect/test/daily-v2.csv`,
+        sourceModifiedAt: "2026-08-14T10:00:00.000Z",
+        table: {
+          sourceName: "daily.csv",
+          sheetName: null,
+          headers: ["Code", "Value"],
+          rows: [{ Code: "new", Value: 3 }],
+        },
+      });
+      expect(replacement).toMatchObject({ rowsReplaced: 2, acceptedRows: 1 });
+      const after = await client.query("select data from public.curated_records where pipeline_id = $1", [created.id]);
+      expect(after.rows.map((row) => row.data.Code)).toEqual(["new"]);
+    });
+  });
 });

@@ -39,6 +39,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   if (!configuration) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
   const connectHref = tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/admin/connect" });
   const saveAction = savePipelineConfigurationAction.bind(null, configuration.id);
+  const isSalesforce = configuration.connectorType === "salesforce";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -91,14 +92,19 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
                   </tr>
                 </thead>
                 <tbody>
-                  {configuration.fieldMappings.map((mapping, position) => (
+                  {configuration.fieldMappings.map((mapping, position) => {
+                    const lockedSalesforceField = isSalesforce && (mapping.sourceField === "Id" || mapping.sourceField === "IsDeleted");
+                    return (
                     <tr key={mapping.sourceField} className="border-b border-line last:border-b-0">
-                      <td className="px-2 py-3"><input aria-label={`Include ${mapping.sourceField}`} type="checkbox" name={`included:${position}`} defaultChecked={mapping.isIncluded} /></td>
+                      <td className="px-2 py-3">
+                        {lockedSalesforceField && <input type="hidden" name={`included:${position}`} value="on" />}
+                        <input aria-label={`Include ${mapping.sourceField}`} type="checkbox" name={lockedSalesforceField ? undefined : `included:${position}`} defaultChecked={mapping.isIncluded} disabled={lockedSalesforceField} />
+                      </td>
                       <td className="px-2 py-3 font-medium text-ink">
                         {mapping.sourceField}
                         <input type="hidden" name={`sourceField:${position}`} value={mapping.sourceField} />
                       </td>
-                      <td className="px-2 py-3"><input name={`targetField:${position}`} required maxLength={200} defaultValue={mapping.targetField} className="w-full rounded border border-line bg-white px-2 py-1.5 text-text" /></td>
+                      <td className="px-2 py-3"><input name={`targetField:${position}`} required maxLength={200} defaultValue={mapping.targetField} readOnly={lockedSalesforceField} className="w-full rounded border border-line bg-white px-2 py-1.5 text-text read-only:bg-slate-50 read-only:text-muted" /></td>
                       <td className="px-2 py-3">
                         <select name={`dataType:${position}`} defaultValue={mapping.dataType} className="w-full rounded border border-line bg-white px-2 py-1.5 text-text">
                           {typeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -106,7 +112,8 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
                       </td>
                       <td className="px-2 py-3"><input aria-label={`Require ${mapping.sourceField}`} type="checkbox" name={`required:${position}`} defaultChecked={mapping.isRequired} /></td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -119,7 +126,13 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
 
         <section className="rounded-lg border border-line bg-panel p-5">
           <h2 className="font-display text-lg font-semibold text-ink">3. Load and row checks</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          {isSalesforce ? (
+            <div className="mt-4 rounded border border-line bg-white px-4 py-3 text-sm text-muted">
+              <input type="hidden" name="loadMode" value="upsert" />
+              <input type="hidden" name="keyColumns" value="Id" />
+              Salesforce uses an immutable <strong className="text-ink">Id upsert</strong>. New records are inserted, changed records are updated, and Salesforce deletions remain as tombstones for lineage rather than silently disappearing.
+            </div>
+          ) : <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <label className="text-xs font-semibold uppercase tracking-wide text-muted">
               Load behaviour
               <select name="loadMode" defaultValue={configuration.loadMode} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
@@ -133,15 +146,15 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
               <input name="keyColumns" defaultValue={configuration.keyColumns.join(", ")} placeholder="response_id" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
               <span className="mt-1 block font-normal normal-case tracking-normal">Required for upsert. Use dataset field names, separated by commas.</span>
             </label>
-          </div>
+          </div>}
           <p className="mt-4 rounded bg-white px-3 py-2 text-sm text-muted">Rows with missing required values, invalid configured types, missing keys or duplicate source keys are quarantined and counted in run health.</p>
         </section>
 
         <section className="rounded-lg border border-line bg-panel p-5">
           <h2 className="font-display text-lg font-semibold text-ink">4. Refresh schedule</h2>
-          {configuration.connectorType === "sharepoint" ? (
+          {configuration.connectorType === "sharepoint" || isSalesforce ? (
             <label className="mt-4 block max-w-sm text-xs font-semibold uppercase tracking-wide text-muted">
-              Check Microsoft for changes
+              {isSalesforce ? "Refresh Salesforce object" : "Check Microsoft for changes"}
               <select name="pollIntervalMinutes" defaultValue={String(configuration.pollIntervalMinutes ?? 60)} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
                 <option value="60">Every hour</option>
                 <option value="180">Every 3 hours</option>

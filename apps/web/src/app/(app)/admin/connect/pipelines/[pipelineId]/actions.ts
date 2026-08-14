@@ -77,10 +77,10 @@ export async function savePipelineConfigurationAction(pipelineId: string, formDa
       metadata: {
         versionNumber: saved.versionNumber,
         connectorType: saved.connectorType,
-        loadMode,
-        keyColumns,
+        loadMode: saved.loadMode,
+        keyColumns: saved.keyColumns,
         mappedFields: fieldMappings.filter((mapping) => mapping.isIncluded).length,
-        pollIntervalMinutes,
+        pollIntervalMinutes: saved.pollIntervalMinutes,
       },
     });
   });

@@ -104,6 +104,11 @@ describe("RLS tenant isolation", () => {
       [tenantB.tenantId, pipelineBId],
     );
     mappingBId = Number(mappingB.id);
+    await admin.query(
+      `insert into public.pipeline_sync_state (pipeline_id, tenant_id, poll_interval_minutes)
+       values ($1, $2, 1440), ($3, $4, 60)`,
+      [pipelineAId, tenantA.tenantId, pipelineBId, tenantB.tenantId],
+    );
   });
 
   afterAll(async () => {
@@ -388,15 +393,27 @@ describe("RLS tenant isolation", () => {
     try {
       const rowsA = await withUserContext(
         { userId: tenantA.profileId, tenantId: tenantA.tenantId },
-        (c) => c.query("select id, tenant_id from public.connectors order by id").then((r) => r.rows),
+        async (c) => ({
+          connectors: await c.query("select id, tenant_id from public.connectors order by id").then((r) => r.rows),
+          schedules: await c.query("select tenant_id, poll_interval_minutes from public.pipeline_sync_state").then((r) => r.rows),
+        }),
       );
-      expect(rowsA).toEqual([{ id: connectorAId, tenant_id: tenantA.tenantId }]);
+      expect(rowsA).toEqual({
+        connectors: [{ id: connectorAId, tenant_id: tenantA.tenantId }],
+        schedules: [{ tenant_id: tenantA.tenantId, poll_interval_minutes: 1440 }],
+      });
 
       const rowsB = await withUserContext(
         { userId: tenantA.profileId, tenantId: tenantB.tenantId },
-        (c) => c.query("select id, tenant_id from public.connectors order by id").then((r) => r.rows),
+        async (c) => ({
+          connectors: await c.query("select id, tenant_id from public.connectors order by id").then((r) => r.rows),
+          schedules: await c.query("select tenant_id, poll_interval_minutes from public.pipeline_sync_state").then((r) => r.rows),
+        }),
       );
-      expect(rowsB).toEqual([{ id: connectorBId, tenant_id: tenantB.tenantId }]);
+      expect(rowsB).toEqual({
+        connectors: [{ id: connectorBId, tenant_id: tenantB.tenantId }],
+        schedules: [{ tenant_id: tenantB.tenantId, poll_interval_minutes: 60 }],
+      });
     } finally {
       await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [
         tenantB.tenantId,
