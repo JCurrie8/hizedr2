@@ -54,7 +54,7 @@ export async function getPipelineBuilderConfiguration(
   const { rows: [row] } = await client.query(
     `select p.id, p.name, p.status, p.connector_id, p.load_mode, p.key_columns,
             p.source_config, c.name as connector_name, c.connector_type,
-            css.poll_interval_minutes,
+            coalesce(pss.poll_interval_minutes, css.poll_interval_minutes) as poll_interval_minutes,
             latest_run.status as last_run_status, latest_run.queued_at as last_run_at,
             coalesce(latest_run.headers, '[]'::jsonb) as discovered_headers,
             coalesce(version.version_number, 0)::integer as version_number
@@ -63,6 +63,8 @@ export async function getPipelineBuilderConfiguration(
        on c.id = p.connector_id and c.tenant_id = p.tenant_id
      left join public.connector_sync_state css
        on css.connector_id = c.id and css.tenant_id = c.tenant_id
+     left join public.pipeline_sync_state pss
+       on pss.pipeline_id = p.id and pss.tenant_id = p.tenant_id
      left join lateral (
        select pr.status, pr.queued_at, sb.metadata -> 'headers' as headers
        from public.pipeline_runs pr
@@ -140,7 +142,13 @@ export async function savePipelineBuilderConfiguration(
     pollIntervalMinutes: number | null;
     changeNote: string | null;
   },
-): Promise<{ versionNumber: number; connectorType: string }> {
+): Promise<{
+  versionNumber: number;
+  connectorType: string;
+  loadMode: LoadMode;
+  keyColumns: string[];
+  pollIntervalMinutes: number | null;
+}> {
   const { rows: [pipeline] } = await client.query(
     `select p.id, p.connector_id, p.source_config, c.connector_type
      from public.pipelines p
@@ -187,15 +195,32 @@ export async function savePipelineBuilderConfiguration(
     throw new Error("Include at least one field in the governed dataset.");
   }
 
-  const keyColumns = [...new Set(input.keyColumns.map((column) => validateFieldName(column, "Key field")))];
+  if (pipeline.connector_type === "salesforce") {
+    const idMapping = fieldMappings.find((mapping) => mapping.sourceField === "Id");
+    if (!idMapping?.isIncluded || idMapping.targetField !== "Id") {
+      throw new Error("Salesforce Id must remain included as the governed dataset key.");
+    }
+    const sourceConfig = pipeline.source_config as Record<string, unknown>;
+    if (sourceConfig.includeDeleted === true) {
+      const deletedMapping = fieldMappings.find((mapping) => mapping.sourceField === "IsDeleted");
+      if (!deletedMapping?.isIncluded || deletedMapping.targetField !== "IsDeleted") {
+        throw new Error("Salesforce IsDeleted must remain included so deletions stay traceable.");
+      }
+    }
+  }
+
+  const requestedKeyColumns = pipeline.connector_type === "salesforce" ? ["Id"] : input.keyColumns;
+  const keyColumns = [...new Set(requestedKeyColumns.map((column) => validateFieldName(column, "Key field")))];
   const includedTargets = new Set(fieldMappings.filter((mapping) => mapping.isIncluded).map((mapping) => mapping.targetField.toLocaleLowerCase("en-GB")));
   const unknownKeys = keyColumns.filter((column) => fieldMappings.length > 0 && !includedTargets.has(column.toLocaleLowerCase("en-GB")));
   if (unknownKeys.length > 0) throw new Error(`Load keys must be included target fields: ${unknownKeys.join(", ")}.`);
-  if (input.loadMode === "upsert" && keyColumns.length === 0) throw new Error("Upsert pipelines require at least one load key.");
+  const loadMode: LoadMode = pipeline.connector_type === "salesforce" ? "upsert" : input.loadMode;
+  if (loadMode === "upsert" && keyColumns.length === 0) throw new Error("Upsert pipelines require at least one load key.");
 
-  const pollIntervalMinutes = pipeline.connector_type === "sharepoint" ? input.pollIntervalMinutes : null;
-  if (pollIntervalMinutes !== null && (!Number.isInteger(pollIntervalMinutes) || pollIntervalMinutes < 60 || pollIntervalMinutes > 1440)) {
-    throw new Error("Microsoft polling must be between one hour and 24 hours.");
+  const scheduledConnector = pipeline.connector_type === "sharepoint" || pipeline.connector_type === "salesforce";
+  const pollIntervalMinutes = scheduledConnector ? input.pollIntervalMinutes : null;
+  if (pollIntervalMinutes !== null && ![60, 180, 360, 720, 1440].includes(pollIntervalMinutes)) {
+    throw new Error("Scheduled polling must be hourly, every 3/6/12 hours, or daily.");
   }
   const scheduleCron = pollIntervalMinutes === null
     ? null
@@ -211,7 +236,7 @@ export async function savePipelineBuilderConfiguration(
     `update public.pipelines set name = $3, load_mode = $4, key_columns = $5::text[],
        schedule_cron = $6, updated_at = now()
      where id = $1 and tenant_id = $2`,
-    [input.pipelineId, input.tenantId, name, input.loadMode, keyColumns, scheduleCron],
+    [input.pipelineId, input.tenantId, name, loadMode, keyColumns, scheduleCron],
   );
   await client.query(
     `delete from public.pipeline_field_mappings where pipeline_id = $1 and tenant_id = $2`,
@@ -237,12 +262,20 @@ export async function savePipelineBuilderConfiguration(
       })))],
     );
   }
-  if (pollIntervalMinutes !== null) {
+  if (pollIntervalMinutes !== null && pipeline.connector_type === "sharepoint") {
     await client.query(
       `update public.connector_sync_state set poll_interval_minutes = $3,
          next_poll_at = least(next_poll_at, now() + make_interval(mins => $3)), updated_at = now()
        where connector_id = $1 and tenant_id = $2`,
       [pipeline.connector_id, input.tenantId, pollIntervalMinutes],
+    );
+  }
+  if (pollIntervalMinutes !== null && pipeline.connector_type === "salesforce") {
+    await client.query(
+      `update public.pipeline_sync_state set poll_interval_minutes = $3,
+         next_poll_at = least(next_poll_at, now() + make_interval(mins => $3)), updated_at = now()
+       where pipeline_id = $1 and tenant_id = $2`,
+      [input.pipelineId, input.tenantId, pollIntervalMinutes],
     );
   }
 
@@ -255,7 +288,7 @@ export async function savePipelineBuilderConfiguration(
     name,
     connectorType: pipeline.connector_type,
     sourceConfig: pipeline.source_config,
-    loadMode: input.loadMode,
+    loadMode,
     keyColumns,
     fieldMappings,
     pollIntervalMinutes,
@@ -266,5 +299,11 @@ export async function savePipelineBuilderConfiguration(
      values ($1, $2, $3, $4::jsonb, $5, $6)`,
     [input.tenantId, input.pipelineId, version.next_version, JSON.stringify(configuration), input.changeNote, input.actorUserId],
   );
-  return { versionNumber: version.next_version, connectorType: pipeline.connector_type };
+  return {
+    versionNumber: version.next_version,
+    connectorType: pipeline.connector_type,
+    loadMode,
+    keyColumns,
+    pollIntervalMinutes,
+  };
 }

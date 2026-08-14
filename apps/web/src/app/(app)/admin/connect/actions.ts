@@ -28,6 +28,20 @@ import {
 } from "@/server/domains/connectors/sharepoint-connectors";
 import { syncSharePointWorkbook } from "@/server/domains/connectors/sharepoint-sync";
 import {
+  authenticateSalesforce,
+  describeSalesforceObject,
+  discoverSalesforceObjects,
+  normalizeSalesforceDomain,
+  resolveSalesforceApiVersion,
+} from "@/server/domains/connectors/salesforce-api";
+import {
+  createSalesforceConnector,
+  createSalesforceObjectPipeline,
+  getSalesforceConnectorCredentials,
+  replaceSalesforceCatalog,
+} from "@/server/domains/connectors/salesforce-connectors";
+import { syncSalesforcePipeline } from "@/server/domains/connectors/salesforce-sync";
+import {
   createR2Upload,
   deleteR2Object,
   downloadR2Object,
@@ -48,6 +62,12 @@ async function requireConnectOperator() {
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
     (client) => assertProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" }),
   );
+  return ctx;
+}
+
+async function requireCompanyAdmin() {
+  const ctx = await requireConnectOperator();
+  if (ctx.role !== "company_admin") throw new Error("Only a company admin can save Salesforce credentials.");
   return ctx;
 }
 
@@ -220,6 +240,141 @@ export async function syncMicrosoftWorkbookAction(formData: FormData) {
   revalidatePath("/admin/connect");
 }
 
+export async function createSalesforceConnectionAction(formData: FormData) {
+  const ctx = await requireCompanyAdmin();
+  const name = String(formData.get("name") ?? "").trim();
+  if (name.length < 2 || name.length > 100) throw new Error("Connection name must be between 2 and 100 characters.");
+  const credentials = {
+    myDomainUrl: normalizeSalesforceDomain(String(formData.get("myDomainUrl") ?? "")),
+    clientId: String(formData.get("clientId") ?? "").trim(),
+    clientSecret: String(formData.get("clientSecret") ?? "").trim(),
+  };
+  if (credentials.clientId.length < 10 || credentials.clientId.length > 500) throw new Error("Enter a valid Salesforce consumer key.");
+  if (credentials.clientSecret.length < 10 || credentials.clientSecret.length > 500) throw new Error("Enter a valid Salesforce consumer secret.");
+  const session = await authenticateSalesforce(credentials);
+  const requestedVersion = String(formData.get("apiVersion") ?? "").trim() || undefined;
+  const apiVersion = await resolveSalesforceApiVersion(session, requestedVersion);
+  const catalog = await discoverSalesforceObjects(session, apiVersion);
+  if (catalog.length === 0) throw new Error("The Salesforce integration user cannot query any objects.");
+
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    const created = await createSalesforceConnector(client, {
+      tenantId: ctx.tenant.id,
+      createdBy: ctx.profileId,
+      name,
+      credentials,
+      apiVersion,
+      catalog,
+    });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "connect.salesforce_connected",
+      targetType: "connector",
+      targetId: created.connectorId,
+      metadata: { myDomainUrl: credentials.myDomainUrl, apiVersion, queryableObjects: catalog.length },
+    });
+  });
+  revalidatePath("/admin/connect");
+}
+
+export async function refreshSalesforceCatalogAction(formData: FormData) {
+  const ctx = await requireConnectOperator();
+  const connectorId = String(formData.get("connectorId") ?? "");
+  if (!UUID_PATTERN.test(connectorId)) throw new Error("Invalid Salesforce connection.");
+  const stored = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    (client) => getSalesforceConnectorCredentials(client, { tenantId: ctx.tenant.id, connectorId }),
+  );
+  const session = await authenticateSalesforce(stored.credentials);
+  const apiVersion = await resolveSalesforceApiVersion(session, stored.apiVersion);
+  const catalog = await discoverSalesforceObjects(session, apiVersion);
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    await replaceSalesforceCatalog(client, { tenantId: ctx.tenant.id, connectorId, apiVersion, catalog });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "connect.salesforce_catalog_refreshed",
+      targetType: "connector",
+      targetId: connectorId,
+      metadata: { apiVersion, queryableObjects: catalog.length },
+    });
+  });
+  revalidatePath("/admin/connect");
+}
+
+export async function createSalesforcePipelineAction(connectorId: string, formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (!UUID_PATTERN.test(connectorId)) throw new Error("Invalid Salesforce connection.");
+  const objectName = String(formData.get("objectName") ?? "").trim();
+  const pipelineName = String(formData.get("pipelineName") ?? "").trim();
+  if (pipelineName.length < 2 || pipelineName.length > 100) throw new Error("Pipeline name must be between 2 and 100 characters.");
+  const selectedFields = formData.getAll("fields").map(String);
+  if (selectedFields.length === 0 || selectedFields.length > 250) throw new Error("Select between 1 and 250 Salesforce fields.");
+  const rawInitialHistory = String(formData.get("initialHistory") ?? "full");
+  const initialLookbackSeconds = rawInitialHistory === "full" ? null : Number(rawInitialHistory) * 86_400;
+  if (initialLookbackSeconds !== null && (!Number.isInteger(initialLookbackSeconds) || initialLookbackSeconds < 86_400 || initialLookbackSeconds > 315_360_000)) {
+    throw new Error("Invalid Salesforce bootstrap window.");
+  }
+  const pollIntervalMinutes = Number(formData.get("pollIntervalMinutes") ?? 1440);
+  if (![60, 180, 360, 720, 1440].includes(pollIntervalMinutes)) throw new Error("Invalid Salesforce refresh interval.");
+  const stored = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    (client) => getSalesforceConnectorCredentials(client, { tenantId: ctx.tenant.id, connectorId }),
+  );
+  const session = await authenticateSalesforce(stored.credentials);
+  const description = await describeSalesforceObject(session, stored.apiVersion, objectName);
+  const created = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => {
+      const pipeline = await createSalesforceObjectPipeline(client, {
+        tenantId: ctx.tenant.id,
+        connectorId,
+        createdBy: ctx.profileId,
+        pipelineName,
+        description,
+        selectedFields,
+        apiVersion: stored.apiVersion,
+        initialLookbackSeconds,
+        overlapSeconds: 86_400,
+        pollIntervalMinutes,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "connect.salesforce_pipeline_created",
+        targetType: "pipeline",
+        targetId: pipeline.pipelineId,
+        metadata: {
+          connectorId,
+          object: description.name,
+          fields: selectedFields.length,
+          modifiedField: description.modifiedField,
+          initialLookbackSeconds,
+          overlapSeconds: 86_400,
+          pollIntervalMinutes,
+        },
+      });
+      return pipeline;
+    },
+  );
+  revalidatePath("/admin/connect");
+  revalidatePath(`/admin/connect/pipelines/${created.pipelineId}`);
+}
+
+export async function syncSalesforcePipelineAction(formData: FormData) {
+  const ctx = await requireConnectOperator();
+  const pipelineId = String(formData.get("pipelineId") ?? "");
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid Salesforce pipeline.");
+  await syncSalesforcePipeline({
+    tenantId: ctx.tenant.id,
+    actorUserId: ctx.profileId,
+    pipelineId,
+    triggerType: "manual_sync",
+  });
+  revalidatePath("/admin/connect");
+}
+
 export interface PreparedManualUpload {
   pipelineId: string;
   connectorId: string;
@@ -234,6 +389,7 @@ export async function prepareManualUploadAction(input: {
   fileName: string;
   sizeBytes: number;
   contentSha256: string;
+  confirmSnapshotReplace: boolean;
 }): Promise<PreparedManualUpload> {
   const ctx = await requireConnectOperator();
   const extension = validateUploadInput(input);
@@ -244,6 +400,9 @@ export async function prepareManualUploadAction(input: {
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
     (client) => getManualFilePipeline(client, { tenantId: ctx.tenant.id, pipelineId: input.pipelineId }),
   );
+  if (pipeline.loadMode === "snapshot" && input.confirmSnapshotReplace !== true) {
+    throw new Error("Confirm that this file should replace the current dataset before uploading.");
+  }
   const day = new Date().toISOString().slice(0, 10);
   const storageKey = `${ctx.tenant.id}/connect/${pipeline.connectorId}/${day}/${randomUUID()}-${safeStorageFileName(input.fileName)}`;
   const upload = await createR2Upload({
@@ -273,6 +432,7 @@ export async function finaliseManualUploadAction(input: {
   sizeBytes: number;
   contentSha256: string;
   sourceLastModified: number | null;
+  confirmSnapshotReplace: boolean;
 }) {
   const ctx = await requireConnectOperator();
   const extension = validateUploadInput(input);
@@ -283,6 +443,9 @@ export async function finaliseManualUploadAction(input: {
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
     (client) => getManualFilePipeline(client, { tenantId: ctx.tenant.id, pipelineId: input.pipelineId }),
   );
+  if (pipeline.loadMode === "snapshot" && input.confirmSnapshotReplace !== true) {
+    throw new Error("Confirm that this file should replace the current dataset.");
+  }
   if (pipeline.connectorId !== input.connectorId) throw new Error("The upload connector does not match the pipeline.");
   const requiredPrefix = `${ctx.tenant.id}/connect/${pipeline.connectorId}/`;
   if (!input.storageKey.startsWith(requiredPrefix) || input.storageKey.includes("..")) {

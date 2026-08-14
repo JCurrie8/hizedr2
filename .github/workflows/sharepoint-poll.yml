@@ -1,4 +1,4 @@
-name: SharePoint poll
+name: Connect source poll
 
 on:
   schedule:
@@ -10,12 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: hized-production-sharepoint-poll
+  group: hized-production-connect-poll
   cancel-in-progress: false
 
 jobs:
   poll:
-    name: Poll due Microsoft workbooks
+    name: Poll due Microsoft and Salesforce pipelines
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
@@ -30,4 +30,4 @@ jobs:
           fi
           curl --fail-with-body --silent --show-error --max-time 360 \
             -H "Authorization: Bearer $CRON_SECRET" \
-            https://hized.app/api/cron/sharepoint
+            https://hized.app/api/cron/connect
