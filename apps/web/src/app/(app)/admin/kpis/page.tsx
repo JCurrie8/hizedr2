@@ -67,7 +67,7 @@ export default async function KpiCataloguePage() {
       <details className="mt-6 rounded-xl border border-line bg-panel p-5 sm:p-6">
         <summary className="cursor-pointer font-display text-xl font-semibold text-ink">Create a governed KPI</summary>
         <p className="mt-2 text-sm leading-6 text-muted">Analysts and Company Admins can prepare a complete draft. A Company Admin must review it before Pulse can use it.</p>
-        {datasets.length ? <KpiDefinitionForm action={createKpiDraftAction} datasets={datasets} dimensions={dimensions} /> : <p className="mt-4 text-sm text-danger">Publish a governed dataset in Connect before creating a KPI.</p>}
+        {datasets.length ? <KpiDefinitionForm action={createKpiDraftAction} datasets={datasets} dimensions={dimensions} /> : <p className="mt-4 text-sm text-danger">Publish a <Link href={tenantHref("/admin/datasets")} className="font-semibold underline">governed dataset</Link> before creating a KPI.</p>}
       </details>
 
       <section className="mt-6 rounded-xl border border-line bg-panel p-5 sm:p-6" aria-labelledby="dimension-heading">

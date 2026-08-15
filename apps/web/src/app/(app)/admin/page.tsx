@@ -12,6 +12,13 @@ const settings = [
     allowedRoles: ["company_admin", "analyst"],
   },
   {
+    title: "Governed datasets",
+    description: "Publish Connect output, govern field sensitivity and record drill-through.",
+    path: "/admin/datasets",
+    adminOnly: false,
+    allowedRoles: ["company_admin", "analyst"],
+  },
+  {
     title: "KPI catalogue",
     description: "Review governed definitions, versions, owners and source datasets.",
     path: "/admin/kpis",

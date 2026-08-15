@@ -87,6 +87,59 @@ describe("analytics view RLS", () => {
     ))).rejects.toThrow(/row-level security/);
   });
 
+  it("keeps record projection rules inside the selected tenant and away from ordinary members", async () => {
+    const datasetId = await withUserContext({ userId: tenantA.profileId, tenantId: tenantA.tenantId }, async (client) => {
+      const { rows: [dataset] } = await client.query(
+        `insert into public.governed_datasets
+           (tenant_id, dataset_key, name, subject_area, status, refresh_cadence,
+            expected_latency, created_by, updated_by)
+         values ($1, 'projection_rls', 'Projection RLS', 'Operations', 'published', 'daily',
+                 interval '1 day', $2, $2)
+         returning id`,
+        [tenantA.tenantId, tenantA.profileId],
+      );
+      await client.query(
+        `insert into public.governed_dataset_fields
+           (tenant_id, dataset_id, field_key, source_field, name, data_type, field_role, is_sensitive)
+         values ($1, $2, 'team_code', 'Team Code', 'Team code', 'text', 'dimension', false),
+                ($1, $2, 'completed_on', 'Completed On', 'Completed on', 'date', 'time', false),
+                ($1, $2, 'engineer_email', 'Engineer Email', 'Engineer email', 'text', 'dimension', true)`,
+        [tenantA.tenantId, dataset.id],
+      );
+      await client.query(
+        `insert into public.governed_record_projection_rules
+           (tenant_id, dataset_id, org_code_field_key, occurred_at_field_key,
+            projected_field_keys, created_by, updated_by)
+         values ($1, $2, 'team_code', 'completed_on', array['team_code']::text[], $3, $3)`,
+        [tenantA.tenantId, dataset.id, tenantA.profileId],
+      );
+      return dataset.id as string;
+    });
+
+    // A sensitive field can never enter the rule, even by direct SQL.
+    await expect(withUserContext({ userId: tenantA.profileId, tenantId: tenantA.tenantId }, (client) => client.query(
+      `update public.governed_record_projection_rules
+          set projected_field_keys = array['team_code', 'engineer_email']::text[], updated_by = $2
+        where tenant_id = $1 and dataset_id = $3`,
+      [tenantA.tenantId, tenantA.profileId, datasetId],
+    ))).rejects.toThrow(/engineer_email/);
+
+    const [memberRows, otherTenantRows, borrowedContextRows] = await Promise.all([
+      withUserContext({ userId: colleague.profileId, tenantId: tenantA.tenantId }, (client) => client.query(
+        "select id from public.governed_record_projection_rules where dataset_id = $1", [datasetId],
+      ).then((result) => result.rows)),
+      withUserContext({ userId: tenantB.profileId, tenantId: tenantB.tenantId }, (client) => client.query(
+        "select id from public.governed_record_projection_rules where dataset_id = $1", [datasetId],
+      ).then((result) => result.rows)),
+      withUserContext({ userId: tenantB.profileId, tenantId: tenantA.tenantId }, (client) => client.query(
+        "select id from public.governed_record_projection_rules where dataset_id = $1", [datasetId],
+      ).then((result) => result.rows)),
+    ]);
+    expect(memberRows).toHaveLength(0);
+    expect(otherTenantRows).toHaveLength(0);
+    expect(borrowedContextRows).toHaveLength(0);
+  });
+
   it("does not give a KPI governor implicit access to someone else's private Canvas board", async () => {
     const rows = await withUserContext({ userId: tenantA.profileId, tenantId: tenantA.tenantId }, (client) =>
       client.query("select id from public.analytics_views where id = $1", [colleagueViewId]).then((result) => result.rows));
