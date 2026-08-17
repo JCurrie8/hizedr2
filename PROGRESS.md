@@ -66,6 +66,66 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - Migration `0032` and, for the same reason, migration `0035` record a Postgres behaviour worth remembering: `INSERT ... RETURNING` evaluates the table's SELECT policy, and a policy helper that self-queries its own table cannot see the candidate row in the statement snapshot. Any new governed table whose read policy is id-based will fail to insert from the application — pass the candidate row's governance columns to a row-shaped helper instead. This was found by an integration test, not by inspection; seed scripts use the owner connection and never exercise it.
 - Migration `0027` records a separate intra-tenant privacy correction caught before the visual release: KPI-governor authority initially made every private Canvas board readable/editable to Company Admins and Analysts. Canvas privacy is now ownership/explicit-grant based; KPI-governor access applies automatically only to Pulse. The live restricted-role test proves a Company Admin cannot open another member's private board.
 
+## Open handoff — release PR #30 (delete this section once released)
+
+**Status: built, verified, gates green, NOT released.** Claude built the slice but could not finish the release: both local environment files point at the Neon `vercel-dev` branch (`ep-round-hall-a27p9bzu`), and the production owner connection string is deliberately not in the repo, so there was no way to apply the migration to production from this machine. Don't repeat that dead end — if your environment has the production `MIGRATIONS_DATABASE_URL`, you can finish this in about ten minutes.
+
+- Branch `claude/governed-record-drill-through`, head commit `ac0105e` (plus this handoff commit).
+- PR: https://github.com/JCurrie8/hizedr2/pull/30 — `CLEAN` / `MERGEABLE`, all four gates green (quality/build, hosted migrations+integration, Vercel preview, preview comments).
+- Migration `0035_governed_record_projection_rules.sql` is applied to `vercel-dev` and to the CI branch (the hosted gate ran it). **It is not applied to production.**
+
+### Order matters
+
+Apply the migration to production **before** merging. The new code reads `governed_record_projection_rules` and `governed_dataset_fields.source_field`; merging first would deploy an `/admin/datasets` page that fails until the schema catches up. The migration itself is safe to apply ahead of the deploy: it only adds a nullable column and replaces the `governed_datasets` SELECT policy with a semantically identical row-shaped one, so the code currently in production keeps working in the gap.
+
+### 1. Apply to the production Neon branch
+
+Confirm the connection really is the `production` branch before running anything, then:
+
+```
+cd db && MIGRATIONS_DATABASE_URL="<production owner URL>" node migrate.mjs
+```
+
+`migrate.mjs` wraps each file in its own transaction and records it in `public._migrations`, so a failure rolls back cleanly.
+
+### 2. Verify against production before merging
+
+Expected: `ledger 1`, `rls true`, `policies 4`, `dataset_policies 4`, `source_col 1`, `app_user_exec true`, `public_exec false`.
+
+```sql
+select
+  (select count(*) from public._migrations
+    where filename = '0035_governed_record_projection_rules.sql') as ledger,
+  (select relrowsecurity from pg_class where relname = 'governed_record_projection_rules') as rls,
+  (select count(*) from pg_policies where tablename = 'governed_record_projection_rules') as policies,
+  (select count(*) from pg_policies where tablename = 'governed_datasets') as dataset_policies,
+  (select count(*) from information_schema.columns
+    where table_name = 'governed_dataset_fields' and column_name = 'source_field') as source_col,
+  has_function_privilege('app_user', 'public.can_read_governed_dataset_row(uuid,text)', 'execute') as app_user_exec,
+  has_function_privilege('public', 'public.can_read_governed_dataset_row(uuid,text)', 'execute') as public_exec;
+```
+
+`dataset_policies` must still be 4: migration 0035 drops and recreates the `governed_datasets` SELECT policy rather than adding a fifth. A count of 5 means the old policy survived and now ORs with the new one — that is the permissive-policy leak shape from migrations 0006/0011, so stop and investigate rather than merging.
+
+### 3. Merge, deploy, smoke-test
+
+`gh pr merge 30 --squash` (or merge in the UI), confirm Vercel reaches READY on the exact merge commit with the apex and wildcard aliases, then check as usual: `hized.app` apex, a tenant route, `admin.hized.app`, the Better Auth session endpoint, the favicon, and a one-hour runtime-error scan.
+
+### 4. Record it
+
+Add a dated Session Log entry with the merge commit and deployment ID, change the 2026-08-15 entry's "not released" wording, drop "(applied to `vercel-dev` only, unreleased)" from the EPIC-06/07 line in Current State, and delete this handoff section.
+
+### Rollback
+
+Nothing depends on 0035 yet, so if the release has to be undone: `drop table public.governed_record_projection_rules;` `drop function public.validate_governed_record_projection_rule();` `alter table public.governed_dataset_fields drop column source_field;` then restore the previous read policy —
+`drop policy "governed datasets: permitted reads" on public.governed_datasets;`
+`create policy "governed datasets: permitted reads" on public.governed_datasets for select using (public.can_read_governed_dataset(tenant_id, id));`
+`drop function public.can_read_governed_dataset_row(uuid, text);` — and delete the `_migrations` row. Note that restoring the old policy re-introduces the `INSERT ... RETURNING` failure, so the application code must be rolled back with it.
+
+### Two unrelated untracked files
+
+`docs/runbooks/email-setup.md` (a previous Codex session's work, never committed) and `.codex-remote-attachments/` are both still untracked on `main`. Claude deliberately left them alone rather than sweeping them into this PR. The attachments directory looks like it wants a `.gitignore` entry rather than a commit.
+
 ## Session Log
 
 ### 2026-08-15 — Claude (Opus 5) (governed dataset publication + audited Pulse record drill-through)
@@ -80,7 +140,7 @@ Verification: migration applied and re-applied cleanly to `vercel-dev`; 149 web 
 
 An authenticated browser pass ran the whole journey against `vercel-dev` as a real Analyst on a temporary tenant with six curated job records: publish the dataset (`engineer_email` defaulted to sensitive and never appeared in any projection selector), configure the rule, refresh projections (5 projected, 1 unmatched for a job whose team code matches no organisation node), then Pulse → inspect data → "View records" → three North-team records totalling exactly the approved £4,270.75, with the page correctly stating that the records account for the full value. The audit log held `dataset.published`, `dataset.record_projection_configured`, `dataset.records_projected` and one `pulse.record_drill_through` per view. The pass found one real defect — the rule's date field is normally projected too, so the drill table rendered the record date twice — now fixed by dropping the dedicated column when a projected date column already carries it. Desktop and 375px mobile show no page overflow, the wide table scrolls inside its own container, and the console is clean. The temporary tenant, identity, session and fixture scripts were removed afterwards. Signing in used a database-created session rather than a password, so no credentials were entered anywhere.
 
-**Not done:** the demo seed has no pipeline or curated records, so Northstar/Harbour cannot yet show this journey, and dimension-sliced KPI values deliberately carry no lineage. Also worth knowing for the next browser pass: a Company Admin without TOTP is correctly bounced to `/admin/security`, so use an Analyst identity (or enrol) rather than assuming the redirect is a bug. Next: release through the protected gate and apply 0035 to production; after that, widget-level dimension filters and slice-aware lineage.
+**Not done:** the demo seed has no pipeline or curated records, so Northstar/Harbour cannot yet show this journey, and dimension-sliced KPI values deliberately carry no lineage. Also worth knowing for the next browser pass: a Company Admin without TOTP is correctly bounced to `/admin/security`, so use an Analyst identity (or enrol) rather than assuming the redirect is a bug. The work is on PR #30 with every gate green but is **not released** — see "Open handoff — release PR #30" above for the exact steps, which need a production `MIGRATIONS_DATABASE_URL` this machine does not have. After that release: widget-level dimension filters and slice-aware lineage.
 
 ### 2026-08-14 — Codex (Activ8-first Salesforce ETL + guarded manual dataset refresh)
 
