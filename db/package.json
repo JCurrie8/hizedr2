@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "migrate": "node migrate.mjs",
+    "verify-release": "node verify-release.mjs",
     "setup-app-role": "node setup-app-role.mjs",
     "seed-demo": "node seed-demo.mjs",
     "seed-demo:dry-run": "node seed-demo.mjs --dry-run",
