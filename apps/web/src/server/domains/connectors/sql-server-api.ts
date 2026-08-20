@@ -94,14 +94,14 @@ export function isPublicSqlAddress(address: string): boolean {
   return false;
 }
 
-async function assertPublicSqlHost(server: string): Promise<void> {
+export async function assertPublicSqlHost(server: string): Promise<void> {
   const addresses = await lookup(normalizeSqlServerHost(server), { all: true, verbatim: true });
   if (addresses.length === 0 || addresses.some(({ address }) => !isPublicSqlAddress(address))) {
     throw new Error("Hosted SQL connections require a public DNS endpoint. Use the Hized gateway for private or on-premises databases.");
   }
 }
 
-function connectionConfig(credentials: SqlServerCredentials): sql.config {
+export function sqlServerConnectionConfig(credentials: SqlServerCredentials): sql.config {
   return {
     server: normalizeSqlServerHost(credentials.server),
     port: credentials.port,
@@ -122,7 +122,7 @@ function connectionConfig(credentials: SqlServerCredentials): sql.config {
 
 async function withSqlServer<T>(credentials: SqlServerCredentials, work: (pool: sql.ConnectionPool) => Promise<T>): Promise<T> {
   await assertPublicSqlHost(credentials.server);
-  const pool = new sql.ConnectionPool(connectionConfig(credentials));
+  const pool = new sql.ConnectionPool(sqlServerConnectionConfig(credentials));
   try {
     await pool.connect();
     return await work(pool);
@@ -144,7 +144,7 @@ export async function testSqlServerConnection(credentials: SqlServerCredentials)
       ddl_admin: number;
       security_admin: number;
       access_admin: number;
-      control_database: boolean;
+      control_database: number;
       writable_objects: number;
     }>(`
       select
@@ -175,7 +175,7 @@ export async function testSqlServerConnection(credentials: SqlServerCredentials)
       || Number(row.ddl_admin) === 1
       || Number(row.security_admin) === 1
       || Number(row.access_admin) === 1
-      || row.control_database === true
+      || Number(row.control_database) === 1
       || Number(row.writable_objects) > 0
     ) {
       throw new Error("Use a dedicated read-only login; database administration and object write permissions are refused.");

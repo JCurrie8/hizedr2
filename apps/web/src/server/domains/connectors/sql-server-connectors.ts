@@ -92,6 +92,7 @@ export async function createSqlServerConnector(
     port: input.credentials.port,
     database: input.credentials.database,
     serverVersion: input.serverVersion,
+    direction: "source",
     networkMode: "hosted",
     tls: { encrypt: true, trustServerCertificate: false },
     catalog: input.catalog,
@@ -139,6 +140,7 @@ export async function listSqlServerConnectors(
             and run.status in ('succeeded', 'warning')
        ) latest on true
       where c.tenant_id = $1 and c.connector_type in ('sql_server', 'azure_sql')
+        and coalesce(c.config ->> 'direction', 'source') = 'source'
         and c.status <> 'disabled'
       group by c.id
       order by c.created_at desc`,
@@ -179,6 +181,7 @@ export async function getSqlServerCredentials(
          on cc.connector_id = c.id and cc.tenant_id = c.tenant_id
       where c.id = $1 and c.tenant_id = $2
         and c.connector_type in ('sql_server', 'azure_sql')
+        and coalesce(c.config ->> 'direction', 'source') = 'source'
         and c.status in ('active', 'error')`,
     [input.connectorId, input.tenantId],
   );
@@ -219,6 +222,7 @@ export async function createSqlServerPipeline(
     `select id from public.connectors
       where id = $1 and tenant_id = $2
         and connector_type in ('sql_server', 'azure_sql')
+        and coalesce(config ->> 'direction', 'source') = 'source'
         and status in ('active', 'error') for update`,
     [input.connectorId, input.tenantId],
   );
@@ -299,7 +303,9 @@ export async function getSqlServerSyncContext(
        join public.connector_credentials cc on cc.connector_id = c.id and cc.tenant_id = c.tenant_id
        join public.pipeline_checkpoints pc on pc.pipeline_id = p.id and pc.tenant_id = p.tenant_id
       where p.id = $1 and p.tenant_id = $2 and p.status = 'active'
-        and c.connector_type in ('sql_server', 'azure_sql') and c.status in ('active', 'error')`,
+        and c.connector_type in ('sql_server', 'azure_sql')
+        and coalesce(c.config ->> 'direction', 'source') = 'source'
+        and c.status in ('active', 'error')`,
     [input.pipelineId, input.tenantId],
   );
   if (!row) throw new Error("The SQL Server pipeline was not found or is not active.");

@@ -7,6 +7,7 @@ export interface ConnectorOverview {
   id: string;
   name: string;
   connectorType: string;
+  direction: "source" | "destination";
   status: string;
   pipelineCount: number;
   lastRunStatus: string | null;
@@ -39,6 +40,7 @@ export async function listConnectorOverview(
 ): Promise<ConnectorOverview[]> {
   const { rows } = await client.query(
     `select c.id, c.name, c.connector_type, c.status,
+            case when c.config ->> 'direction' = 'destination' then 'destination' else 'source' end as direction,
             coalesce(pipeline_summary.pipeline_count, 0)::integer as pipeline_count,
             latest_run.status as last_run_status,
             latest_run.queued_at as last_run_at
@@ -64,6 +66,7 @@ export async function listConnectorOverview(
     id: row.id,
     name: row.name,
     connectorType: row.connector_type,
+    direction: row.direction,
     status: row.status,
     pipelineCount: row.pipeline_count,
     lastRunStatus: row.last_run_status,
@@ -270,6 +273,10 @@ async function lockPipelineBatch(client: PoolClient, pipelineId: string, sourceB
   await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`${pipelineId}:${sourceBatchId}`]);
 }
 
+async function lockPipelineState(client: PoolClient, pipelineId: string): Promise<void> {
+  await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`pipeline-state:${pipelineId}`]);
+}
+
 async function findCompletedRun(client: PoolClient, pipelineId: string, sourceBatchId: string) {
   const { rows: [run] } = await client.query(
     `select id, status, rows_accepted, rows_rejected
@@ -293,6 +300,7 @@ export async function persistManualFileRun(
     ...input,
     metadata: { ...input.sourceMetadata, sheetName: input.table.sheetName, headers: input.table.headers },
   });
+  await lockPipelineState(client, input.pipeline.id);
   await lockPipelineBatch(client, input.pipeline.id, sourceBatch.id);
   const existingRun = await findCompletedRun(client, input.pipeline.id, sourceBatch.id);
   if (existingRun) {
