@@ -5,6 +5,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      production_migration:
+        description: "Exact migration filename to apply to the Neon production branch (leave blank for CI only)"
+        required: false
+        type: string
+      production_confirmation:
+        description: "Type APPLY PRODUCTION MIGRATION to enable the production job"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -99,3 +108,90 @@ jobs:
 
       - name: Run integration tests
         run: pnpm test
+
+  production-migration:
+    name: Apply and verify production migration
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.production_migration != '' &&
+      inputs.production_confirmation == 'APPLY PRODUCTION MIGRATION'
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: hized-production-database
+      cancel-in-progress: false
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+      EXPECTED_MIGRATION: ${{ inputs.production_migration }}
+    steps:
+      - name: Check out the selected release commit
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Enable the repository pnpm version
+        run: corepack enable
+
+      - name: Validate the requested migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_MIGRATION" =~ ^[0-9]{4}_[a-z0-9_]+\.sql$ ]]; then
+            echo "::error::The migration filename is not valid."
+            exit 1
+          fi
+          if [[ ! -f "db/migrations/$EXPECTED_MIGRATION" ]]; then
+            echo "::error::The requested migration is not present in this release commit."
+            exit 1
+          fi
+          if [[ -z "$NEON_API_KEY" || -z "$NEON_PROJECT_ID" ]]; then
+            echo "::error::NEON_API_KEY and NEON_PROJECT_ID must be configured in GitHub."
+            exit 1
+          fi
+
+      - name: Resolve and mask the production owner connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_base="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID"
+          branches_json="$(curl --fail-with-body --silent --show-error \
+            --header 'accept: application/json' \
+            --header "authorization: Bearer $NEON_API_KEY" \
+            "$api_base/branches")"
+          branch_count="$(jq '[.branches[] | select(.name == "production")] | length' <<<"$branches_json")"
+          if [[ "$branch_count" != "1" ]]; then
+            echo "::error::Expected exactly one Neon branch named production; found $branch_count."
+            exit 1
+          fi
+          branch_id="$(jq -r '.branches[] | select(.name == "production") | .id' <<<"$branches_json")"
+
+          connection_json="$(curl --fail-with-body --silent --show-error --get \
+            --header 'accept: application/json' \
+            --header "authorization: Bearer $NEON_API_KEY" \
+            --data-urlencode "branch_id=$branch_id" \
+            --data-urlencode 'database_name=neondb' \
+            --data-urlencode 'role_name=neondb_owner' \
+            --data-urlencode 'pooled=true' \
+            "$api_base/connection_uri")"
+          connection_uri="$(jq -r '.uri // empty' <<<"$connection_json")"
+          if [[ ! "$connection_uri" =~ ^postgres(ql)?://neondb_owner:.*@.*\.neon\.tech/ ]]; then
+            echo "::error::Neon did not return the expected production owner connection."
+            exit 1
+          fi
+          echo "::add-mask::$connection_uri"
+          echo "MIGRATIONS_DATABASE_URL=$connection_uri" >> "$GITHUB_ENV"
+          echo "Resolved Neon branch 'production' ($branch_id) as neondb_owner; URI is masked."
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations transactionally
+        run: pnpm --filter @hized/migrations migrate
+
+      - name: Verify the production migration and security invariants
+        run: pnpm --filter @hized/migrations verify-release "$EXPECTED_MIGRATION"

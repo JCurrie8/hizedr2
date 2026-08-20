@@ -300,7 +300,10 @@ export default async function DashboardPage({
               </div>
             ))}
           </div>
-          <AnalyticsViewRenderer runtime={configuredView} />
+          <AnalyticsViewRenderer
+            runtime={configuredView}
+            recordDrillHref={(valueId) => tenantHref(`/dashboard/records/${valueId}`)}
+          />
         </section>
       )}
 

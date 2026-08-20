@@ -79,15 +79,20 @@ function EmptyVisual({ message = "No permitted values are available for this vis
 function InspectDataTable({
   widget,
   rows,
+  recordDrillHref,
 }: {
   widget: AnalyticsWidgetDefinition;
   rows: AnalyticsValuePoint[];
+  recordDrillHref?: (valueId: string) => string;
 }) {
   const sortedRows = [...rows].sort((left, right) =>
     left.metricName.localeCompare(right.metricName)
       || left.organisationName.localeCompare(right.organisationName)
       || right.periodEnd.localeCompare(left.periodEnd),
   );
+  const drillableRows = recordDrillHref
+    ? sortedRows.filter((row) => row.hasRecordLineage).length
+    : 0;
 
   return (
     <details className="mt-5 border-t border-line pt-4">
@@ -110,6 +115,7 @@ function InspectDataTable({
                 <th className="px-3 py-2.5 text-right">Target</th>
                 <th className="px-3 py-2.5 text-right">Prior</th>
                 <th className="px-3 py-2.5">Source refreshed</th>
+                {drillableRows > 0 && <th className="px-3 py-2.5">Records</th>}
               </tr>
             </thead>
             <tbody>
@@ -124,6 +130,13 @@ function InspectDataTable({
                     <td className="px-3 py-2.5 text-right text-muted">{row.targetValue === null ? "—" : formatValue(metric, row.targetValue)}</td>
                     <td className="px-3 py-2.5 text-right text-muted">{row.priorPeriodValue === null ? "—" : formatValue(metric, row.priorPeriodValue)}</td>
                     <td className="px-3 py-2.5 text-muted">{DATE_TIME_FORMATTER.format(new Date(row.sourceRefreshedAt))}</td>
+                    {drillableRows > 0 && (
+                      <td className="px-3 py-2.5">
+                        {recordDrillHref && row.hasRecordLineage
+                          ? <a href={recordDrillHref(row.valueId)} className="font-semibold text-teal-deep hover:underline">View records</a>
+                          : <span className="text-muted">—</span>}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -472,7 +485,13 @@ function AnalyticsVisual({ widget, rows }: { widget: AnalyticsWidgetDefinition; 
   return <TableVisual widget={widget} rows={rows} />;
 }
 
-export function AnalyticsViewRenderer({ runtime }: { runtime: AnalyticsViewRuntime }) {
+export function AnalyticsViewRenderer({
+  runtime,
+  recordDrillHref,
+}: {
+  runtime: AnalyticsViewRuntime;
+  recordDrillHref?: (valueId: string) => string;
+}) {
   if (runtime.view.widgets.length === 0) return <EmptyVisual message="This view has no visuals yet." />;
   return (
     <section aria-label={`${runtime.view.name} visuals`} className="grid grid-cols-1 gap-4 md:grid-cols-12">
@@ -488,7 +507,7 @@ export function AnalyticsViewRenderer({ runtime }: { runtime: AnalyticsViewRunti
               <span className="shrink-0 rounded-full bg-canvas px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">{widget.visualType.replaceAll("_", " ")}</span>
             </div>
             <AnalyticsVisual widget={widget} rows={rows} />
-            {widget.visualType !== "text" && <InspectDataTable widget={widget} rows={rows} />}
+            {widget.visualType !== "text" && <InspectDataTable widget={widget} rows={rows} recordDrillHref={recordDrillHref} />}
           </article>
         );
       })}

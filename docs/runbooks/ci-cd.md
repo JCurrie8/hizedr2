@@ -30,7 +30,7 @@ Never put either database URL or a Vercel token in the repository. Vercel alread
 
 ## Schema release ordering
 
-The CI database proves that the cumulative migrations and new application code work together; it does not mutate staging or production. Until a gated production-release workflow is configured, an operator must apply new migrations to staging, verify the deployment there, and apply them to production immediately before merging the corresponding application change to protected `main`.
+The CI database proves that the cumulative migrations and new application code work together; it does not mutate staging or production. Production migrations are applied from the exact release branch through the manually dispatched `CI` workflow. Enter the exact migration filename and the confirmation phrase `APPLY PRODUCTION MIGRATION`; the production job resolves the Neon branch named `production` through the repository's `NEON_API_KEY` secret and `NEON_PROJECT_ID` variable, masks the generated owner URI, runs the transactional migrator, and executes the migration's registered release verifier. The application PR must not merge until that job succeeds. Add a verifier to `db/verify-release.mjs` for every new production migration; an unregistered filename fails closed.
 
 Migration `0013_security_hardening.sql` intentionally removes the insecure email-only invitation functions. Apply it before deploying its application code: the old application will temporarily fail closed for new signups after the migration, while deploying the new application first would call functions that do not exist yet. Coordinate that brief signup maintenance window rather than allowing either mismatch to persist.
 

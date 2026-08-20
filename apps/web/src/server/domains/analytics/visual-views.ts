@@ -120,6 +120,8 @@ export interface AnalyticsValuePoint {
   priorPeriodValue: number | null;
   sourceRefreshedAt: string;
   expectedLatencySeconds: number;
+  /** True when governed record projections are linked to this exact aggregate. */
+  hasRecordLineage: boolean;
 }
 
 export interface AnalyticsDimensionOption {
@@ -996,6 +998,12 @@ export async function loadAnalyticsViewRuntime(
               value.actual_value, value.target_value, value.prior_period_value,
               extract(epoch from value.source_refreshed_at) as source_refreshed_epoch,
               extract(epoch from dataset.expected_latency)::integer as expected_latency_seconds,
+              exists (
+                select 1
+                  from public.kpi_value_record_lineage lineage
+                 where lineage.tenant_id = value.tenant_id
+                   and lineage.kpi_value_id = value.id
+              ) as has_record_lineage,
               row_number() over (
                 partition by value.kpi_definition_id, value.org_node_id
                 order by value.period_end desc, value.calculated_at desc
@@ -1071,6 +1079,7 @@ export async function loadAnalyticsViewRuntime(
       priorPeriodValue: row.prior_period_value === null ? null : Number(row.prior_period_value),
       sourceRefreshedAt: new Date(Number(row.source_refreshed_epoch) * 1_000).toISOString(),
       expectedLatencySeconds: Number(row.expected_latency_seconds),
+      hasRecordLineage: Boolean(row.has_record_lineage),
     })),
   };
 }
