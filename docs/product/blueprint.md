@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.7 |
+| Document status | Build-ready product definition — Version 2.9 |
 
 ### Changes since v1.0
 
@@ -116,6 +116,16 @@ This specification is designed to be handed to an AI software builder, technical
 - **Hosted database extraction has an explicit network and privilege boundary.** The first SQL Server/Azure SQL runtime accepts only TLS-valid, allowlisted public endpoints and a dedicated read-only SQL login. Hized must reject broad database ownership/write roles and must never advise a customer to expose port 1433 merely to make an on-premises source reachable. Private or VPN-only databases use a later outbound Hized gateway/agent that initiates the connection from the customer network.
 - **The first SQL extraction profile is bounded and operationally honest.** Analysts browse permitted tables/views, select scalar fields and configure either a guarded full snapshot or key-based watermark upsert. A manual extract is capped at 100,000 rows and 250 fields; scheduling and the private-network gateway follow through the same pipeline contract. Watermark extraction does not infer hard deletes: use a full snapshot, a governed soft-delete/change-tracking field or scoped Custom ETL when deletion fidelity is required.
 
+### Changes since v2.7
+
+- **Warehouse-first is the preferred Hized-managed implementation route.** When Hized or a customer analyst operates a recurring multi-source data estate, operational feeds—including recurring Excel/CSV and Forms responses—normally land in a customer or Hized-managed SQL staging/curated layer first. Cleaning, history, reconciliation and reusable business rules happen there; Hized then reads governed tables/views through the read-only SQL connector. Activ8 follows this route.
+- **Direct ingestion remains a deliberate lightweight route, not a contradiction.** A small company without a warehouse, or a genuinely standalone low-volume file with no cross-source joins, history or automation burden, can load directly into Hized's tenant-isolated managed storage. The route is chosen per governed dataset during discovery and recorded as its single source of truth; the same feed is never run through both paths merely for convenience.
+
+### Changes since v2.8
+
+- **The SQL data foundation is point one of every Hized Advisory engagement.** Hized sells the consultant-led end-to-end package, so discovery normally selects and establishes an appropriate SQL landing/staging and curated foundation before production dashboards are built—even when the first source is Excel. Hized should prefer a fit-for-purpose free/open-source or low-cost option where it meets the client's reliability, hosting, support and scale requirements; “SQL can be free” must not be misrepresented as “production data infrastructure has no operating cost.”
+- **Direct ingestion is a product capability, not the default consulting method.** It supports migration, urgent proofs, controlled fallback and customers operating the product without a Hized-managed data-foundation engagement. Hized Advisory may deliberately approve it for an exceptional standalone dataset, but the decision and exit path are recorded rather than allowing a quick upload to become unmanaged architecture by accident.
+
 ## 1. Product definition and positioning
 
 ### 1.1 Product vision
@@ -163,7 +173,7 @@ Hized Canvas is the self-serve exploration layer built on the same governed data
 
 ### 2.4 Hized Advisory
 
-Hized Advisory wraps the technology in discovery, data design, KPI definition, implementation, training and ongoing performance improvement. Consultancy revenue funds product development while each implementation strengthens reusable connectors, models and industry templates.
+Hized Advisory wraps the technology in discovery, SQL data-foundation design, KPI definition, implementation, training and ongoing performance improvement. The standard engagement starts by selecting or establishing an appropriate SQL landing/staging and curated layer, then connects governed outputs to Hized. Consultancy revenue funds product development while each implementation strengthens reusable connectors, models and industry templates.
 
 ### 2.5 Commercial packaging
 
@@ -359,7 +369,7 @@ Connections and pipelines are separate concepts. A Company Admin authorises a co
 - SharePoint/OneDrive polling must be configurable frequently enough for the source's operating rhythm (for example every 15–60 minutes for an actively updated Forms workbook). Graph delta exposes the latest observed drive state; Hized must not claim it captured an intermediate workbook content revision that was never downloaded.
 - Cumulative Forms workbooks support a configured stable response key and upsert semantics, so re-reading the latest workbook adds or updates responses rather than appending the full sheet again.
 - Raw landing, staging and curated transformation layers.
-- Hized-managed tenant-isolated SQL is the standard landing/curated destination for every adapter. A source workbook or form remains a delivery mechanism, not the long-term reporting database; a customer-owned SQL Server or warehouse is optional rather than a prerequisite.
+- Every route finishes in Hized-managed tenant-isolated SQL. For every Hized Advisory engagement, the default upstream pattern is source → customer/Hized-managed SQL staging and transformation → Hized read-only extraction; discovery chooses a fit-for-purpose foundation and documents any exception. A source workbook or form remains a delivery mechanism rather than the long-term reporting database. Direct file/CRM ingestion into Hized remains a supported migration, proof, fallback or self-operated path, but is not presented as the equal default for consultant-led delivery.
 - A manual snapshot replacement is destructive only after explicit operator confirmation and a successful non-empty accepted parse. The UI exposes the number of current governed rows to be replaced; an empty or fully quarantined upload leaves the previous SQL dataset intact.
 - Data type mapping, column renaming, filtering, joins, calculated fields and deduplication.
 - Validation rules for nulls, uniqueness, ranges, accepted values, referential integrity and row-count variance.
