@@ -27,6 +27,13 @@ export interface PipelineSqlDestinationOverview {
   lastLoadAt: string | null;
   lastRowsWritten: number | null;
   lastMessage: string | null;
+  scheduleEnabled: boolean;
+  scheduleIntervalMinutes: number;
+  nextLoadAt: string | null;
+  nextRetryAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  consecutiveFailures: number;
 }
 
 export interface SqlDestinationLoadContext {
@@ -125,8 +132,15 @@ export async function configurePipelineSqlDestination(
     connectorId: string;
     targetTable: string;
     createdBy: string;
+    scheduleIntervalMinutes: number | null;
   },
 ): Promise<{ destinationId: string }> {
+  if (
+    input.scheduleIntervalMinutes !== null
+    && ![60, 180, 360, 720, 1440].includes(input.scheduleIntervalMinutes)
+  ) {
+    throw new Error("Choose a supported SQL workbench delivery schedule.");
+  }
   const { rows: [row] } = await client.query(
     `select c.config ->> 'managedSchema' as managed_schema
        from public.connectors c
@@ -146,7 +160,7 @@ export async function configurePipelineSqlDestination(
     throw new Error("The source pipeline or SQL workbench destination was not found. SQL publication pipelines cannot loop back into a destination.");
   }
   const { rows: [existing] } = await client.query(
-    `select d.connector_id, d.target_schema, d.target_table,
+    `select d.connector_id, d.target_schema, d.target_table, d.lease_expires_at,
             exists (
               select 1 from public.pipeline_sql_destination_runs r
                where r.destination_id = d.id and r.tenant_id = d.tenant_id and r.status = 'succeeded'
@@ -156,6 +170,9 @@ export async function configurePipelineSqlDestination(
       for update`,
     [input.pipelineId, input.tenantId],
   );
+  if (existing?.lease_expires_at && new Date(existing.lease_expires_at).valueOf() > Date.now()) {
+    throw new Error("The SQL workbench target cannot be reconfigured while a load is active.");
+  }
   if (
     existing?.has_succeeded === true
     && (
@@ -168,16 +185,32 @@ export async function configurePipelineSqlDestination(
   }
   const { rows: [destination] } = await client.query(
     `insert into public.pipeline_sql_destinations
-       (tenant_id, pipeline_id, connector_id, target_schema, target_table, created_by)
-     values ($1, $2, $3, $4, $5, $6)
+       (tenant_id, pipeline_id, connector_id, target_schema, target_table, created_by,
+        schedule_enabled, schedule_interval_minutes, next_load_at)
+     values ($1, $2, $3, $4, $5, $6, $7::integer is not null,
+             coalesce($7::integer, 60), case when $7::integer is not null then now() else null end)
      on conflict (pipeline_id) do update set
        connector_id = excluded.connector_id,
        target_schema = excluded.target_schema,
        target_table = excluded.target_table,
+       schedule_enabled = excluded.schedule_enabled,
+       schedule_interval_minutes = excluded.schedule_interval_minutes,
+       next_load_at = excluded.next_load_at,
+       next_retry_at = null,
+       lease_token = null,
+       lease_expires_at = null,
        status = 'active',
        updated_at = now()
      returning id`,
-    [input.tenantId, input.pipelineId, input.connectorId, row.managed_schema, input.targetTable, input.createdBy],
+    [
+      input.tenantId,
+      input.pipelineId,
+      input.connectorId,
+      row.managed_schema,
+      input.targetTable,
+      input.createdBy,
+      input.scheduleIntervalMinutes,
+    ],
   );
   return { destinationId: destination.id };
 }
@@ -190,7 +223,10 @@ export async function getPipelineSqlDestination(
     `select d.id, d.connector_id, c.name as connector_name,
             d.target_schema, d.target_table, d.status,
             latest.status as last_load_status, latest.finished_at as last_load_at,
-            latest.rows_written, latest.message
+            latest.rows_written, latest.message,
+            d.schedule_enabled, d.schedule_interval_minutes,
+            d.next_load_at, d.next_retry_at, d.last_success_at,
+            d.last_error, d.consecutive_failures
        from public.pipeline_sql_destinations d
        join public.connectors c on c.id = d.connector_id and c.tenant_id = d.tenant_id
        left join lateral (
@@ -215,7 +251,33 @@ export async function getPipelineSqlDestination(
     lastLoadAt: row.last_load_at ? new Date(row.last_load_at).toISOString() : null,
     lastRowsWritten: row.rows_written === null ? null : Number(row.rows_written),
     lastMessage: row.message,
+    scheduleEnabled: row.schedule_enabled,
+    scheduleIntervalMinutes: Number(row.schedule_interval_minutes),
+    nextLoadAt: row.next_load_at ? new Date(row.next_load_at).toISOString() : null,
+    nextRetryAt: row.next_retry_at ? new Date(row.next_retry_at).toISOString() : null,
+    lastSuccessAt: row.last_success_at ? new Date(row.last_success_at).toISOString() : null,
+    lastError: row.last_error,
+    consecutiveFailures: Number(row.consecutive_failures),
   };
+}
+
+export async function acquireSqlDestinationLoadLease(
+  client: PoolClient,
+  input: { tenantId: string; pipelineId: string },
+): Promise<{ destinationId: string; leaseToken: string }> {
+  const { rows: [row] } = await client.query(
+    `update public.pipeline_sql_destinations set
+       lease_token = gen_random_uuid(),
+       lease_expires_at = now() + interval '15 minutes',
+       last_attempt_at = now(),
+       updated_at = now()
+     where pipeline_id = $1 and tenant_id = $2 and status = 'active'
+       and (lease_expires_at is null or lease_expires_at <= now())
+     returning id, lease_token`,
+    [input.pipelineId, input.tenantId],
+  );
+  if (!row) throw new Error("This SQL workbench target is already loading or is not active.");
+  return { destinationId: row.id, leaseToken: row.lease_token };
 }
 
 function inferDataType(values: unknown[]): PipelineDataType {
@@ -229,7 +291,7 @@ function inferDataType(values: unknown[]): PipelineDataType {
 
 export async function beginSqlDestinationLoad(
   client: PoolClient,
-  input: { tenantId: string; pipelineId: string },
+  input: { tenantId: string; pipelineId: string; destinationId: string; leaseToken: string },
 ): Promise<SqlDestinationLoadContext> {
   // Serialise the workbench snapshot with source-state commits so the selected
   // source revision and its current records form one coherent lineage point.
@@ -237,6 +299,9 @@ export async function beginSqlDestinationLoad(
   const { rows: [row] } = await client.query(
     `select d.id as destination_id, d.connector_id, c.name as connector_name,
             d.target_schema, d.target_table, d.status,
+            d.schedule_enabled, d.schedule_interval_minutes,
+            d.next_load_at, d.next_retry_at, d.last_success_at,
+            d.last_error, d.consecutive_failures,
             cc.ciphertext, cc.iv, cc.auth_tag, cc.key_version,
             latest.id as source_run_id,
             destination_run.status as destination_run_status,
@@ -260,8 +325,9 @@ export async function beginSqlDestinationLoad(
         and destination_run.source_run_id = latest.id
         and destination_run.tenant_id = d.tenant_id
       where d.pipeline_id = $1 and d.tenant_id = $2 and d.status = 'active'
+        and d.id = $3 and d.lease_token = $4 and d.lease_expires_at > now()
       for update of d`,
-    [input.pipelineId, input.tenantId],
+    [input.pipelineId, input.tenantId, input.destinationId, input.leaseToken],
   );
   if (!row) throw new Error("Configure an active SQL destination after the source pipeline has a successful run.");
   const overview: PipelineSqlDestinationOverview = {
@@ -275,6 +341,13 @@ export async function beginSqlDestinationLoad(
     lastLoadAt: null,
     lastRowsWritten: null,
     lastMessage: null,
+    scheduleEnabled: row.schedule_enabled,
+    scheduleIntervalMinutes: Number(row.schedule_interval_minutes),
+    nextLoadAt: row.next_load_at ? new Date(row.next_load_at).toISOString() : null,
+    nextRetryAt: row.next_retry_at ? new Date(row.next_retry_at).toISOString() : null,
+    lastSuccessAt: row.last_success_at ? new Date(row.last_success_at).toISOString() : null,
+    lastError: row.last_error,
+    consecutiveFailures: Number(row.consecutive_failures),
   };
   if (row.destination_run_status === "succeeded") {
     return {
@@ -346,13 +419,78 @@ export async function beginSqlDestinationLoad(
 
 export async function completeSqlDestinationLoad(
   client: PoolClient,
-  input: { tenantId: string; destinationId: string; sourceRunId: string; status: "succeeded" | "failed"; rowsWritten: number; message: string },
+  input: { tenantId: string; destinationId: string; sourceRunId: string; leaseToken: string; rowsWritten: number; message: string },
+): Promise<void> {
+  const run = await client.query(
+    `update public.pipeline_sql_destination_runs set
+       status = 'succeeded', rows_written = $4, message = $5, finished_at = now()
+      where destination_id = $1 and source_run_id = $2 and tenant_id = $3 and status = 'running'`,
+    [input.destinationId, input.sourceRunId, input.tenantId, input.rowsWritten, input.message.slice(0, 500)],
+  );
+  if (run.rowCount !== 1) throw new Error("The SQL destination load ledger changed while the load was running.");
+  const destination = await client.query(
+    `update public.pipeline_sql_destinations set
+       last_success_at = now(), last_error = null, consecutive_failures = 0,
+       next_retry_at = null,
+       next_load_at = case when schedule_enabled
+         then now() + make_interval(mins => schedule_interval_minutes)
+         else null end,
+       lease_token = null, lease_expires_at = null, updated_at = now()
+     where id = $1 and tenant_id = $2 and lease_token = $3
+     returning id`,
+    [input.destinationId, input.tenantId, input.leaseToken],
+  );
+  if (destination.rowCount !== 1) throw new Error("The SQL destination lease expired before the successful load was recorded.");
+}
+
+export async function completeSqlDestinationNoop(
+  client: PoolClient,
+  input: { tenantId: string; destinationId: string; leaseToken: string },
 ): Promise<void> {
   const result = await client.query(
-    `update public.pipeline_sql_destination_runs set
-       status = $4, rows_written = $5, message = $6, finished_at = now()
-      where destination_id = $1 and source_run_id = $2 and tenant_id = $3 and status = 'running'`,
-    [input.destinationId, input.sourceRunId, input.tenantId, input.status, input.rowsWritten, input.message.slice(0, 500)],
+    `update public.pipeline_sql_destinations set
+       last_error = null, consecutive_failures = 0, next_retry_at = null,
+       next_load_at = case when schedule_enabled
+         then now() + make_interval(mins => schedule_interval_minutes)
+         else null end,
+       lease_token = null, lease_expires_at = null, updated_at = now()
+     where id = $1 and tenant_id = $2 and lease_token = $3
+     returning id`,
+    [input.destinationId, input.tenantId, input.leaseToken],
   );
-  if (result.rowCount !== 1) throw new Error("The SQL destination load ledger changed while the load was running.");
+  if (result.rowCount !== 1) throw new Error("The SQL destination lease expired before the unchanged state was recorded.");
+}
+
+export async function recordSqlDestinationLoadFailure(
+  client: PoolClient,
+  input: {
+    tenantId: string;
+    destinationId: string;
+    sourceRunId: string | null;
+    leaseToken: string;
+    message: string;
+  },
+): Promise<void> {
+  const message = input.message.slice(0, 500);
+  if (input.sourceRunId) {
+    await client.query(
+      `update public.pipeline_sql_destination_runs set
+         status = 'failed', rows_written = 0, message = $4, finished_at = now()
+       where destination_id = $1 and source_run_id = $2 and tenant_id = $3 and status = 'running'`,
+      [input.destinationId, input.sourceRunId, input.tenantId, message],
+    );
+  }
+  const result = await client.query(
+    `update public.pipeline_sql_destinations set
+       last_error = $4,
+       consecutive_failures = consecutive_failures + 1,
+       next_retry_at = now() + make_interval(
+         mins => least(60, power(2, least(consecutive_failures, 5))::integer * 5)
+       ),
+       lease_token = null, lease_expires_at = null, updated_at = now()
+     where id = $1 and tenant_id = $2 and lease_token = $3
+     returning id`,
+    [input.destinationId, input.tenantId, input.leaseToken, message],
+  );
+  if (result.rowCount !== 1) throw new Error("The SQL destination lease expired before the failure was recorded.");
 }

@@ -11,6 +11,10 @@ describe("SQL workbench destination RLS", () => {
   let destinationB: string;
   let runA: string;
   let runB: string;
+  let sourceA: string;
+  let sourceB: string;
+  let pipelineA: string;
+  let pipelineB: string;
 
   beforeAll(async () => {
     tenantA = await createTenantWithUser(admin, {
@@ -48,6 +52,13 @@ describe("SQL workbench destination RLS", () => {
          values ($1, $2, $3, 'active', $4) returning id`,
         [fixture.tenantId, source.id, `Pipeline ${suffix}`, fixture.profileId],
       );
+      await admin.query(
+        `insert into public.connector_credentials
+           (tenant_id, connector_id, ciphertext, iv, auth_tag, key_version, created_by)
+         values ($1, $2, decode(repeat('00', 32), 'hex'), decode(repeat('00', 12), 'hex'),
+                 decode(repeat('00', 16), 'hex'), 1, $3)`,
+        [fixture.tenantId, loader.id, fixture.profileId],
+      );
       const { rows: [batch] } = await admin.query(
         `insert into public.source_batches
            (tenant_id, connector_id, batch_kind, source_item_id, source_name,
@@ -66,8 +77,9 @@ describe("SQL workbench destination RLS", () => {
       );
       const { rows: [destination] } = await admin.query(
         `insert into public.pipeline_sql_destinations
-           (tenant_id, pipeline_id, connector_id, target_schema, target_table, created_by)
-         values ($1, $2, $3, 'hized_landing', $4, $5) returning id`,
+           (tenant_id, pipeline_id, connector_id, target_schema, target_table, created_by,
+            schedule_enabled, schedule_interval_minutes, next_load_at)
+         values ($1, $2, $3, 'hized_landing', $4, $5, true, 60, now()) returning id`,
         [fixture.tenantId, pipeline.id, loader.id, `target_${suffix}`, fixture.profileId],
       );
       const { rows: [destinationRun] } = await admin.query(
@@ -79,9 +91,13 @@ describe("SQL workbench destination RLS", () => {
       if (fixture === tenantA) {
         destinationA = destination.id;
         runA = destinationRun.id;
+        sourceA = source.id;
+        pipelineA = pipeline.id;
       } else {
         destinationB = destination.id;
         runB = destinationRun.id;
+        sourceB = source.id;
+        pipelineB = pipeline.id;
       }
     }
   });
@@ -140,5 +156,41 @@ describe("SQL workbench destination RLS", () => {
         [employee.tenantId, employee.profileId],
       ),
     )).rejects.toThrow();
+  });
+
+  it("claims due cross-tenant work without returning a locked tenant", async () => {
+    for (const [fixture, sourceId, pipelineId, suffix] of [
+      [tenantA, sourceA, pipelineA, "eligible"],
+      [tenantB, sourceB, pipelineB, "locked"],
+    ] as const) {
+      const { rows: [batch] } = await admin.query(
+        `insert into public.source_batches
+           (tenant_id, connector_id, batch_kind, source_item_id, source_name,
+            content_sha256, content_type, size_bytes, storage_key)
+         values ($1, $2, 'file_revision', $3, $3, $4, 'text/csv', 10, $5)
+         returning id`,
+        [fixture.tenantId, sourceId, `${suffix}.csv`, (suffix === "eligible" ? "e" : "b").repeat(64), `${fixture.tenantId}/${suffix}.csv`],
+      );
+      await admin.query(
+        `insert into public.pipeline_runs
+           (tenant_id, pipeline_id, connector_id, source_batch_id, trigger_type,
+            status, initiated_by, started_at, finished_at, rows_received, rows_accepted)
+         values ($1, $2, $3, $4, 'manual_upload', 'succeeded', $5, now(), now(), 1, 1)`,
+        [fixture.tenantId, pipelineId, sourceId, batch.id, fixture.profileId],
+      );
+    }
+    await admin.query(
+      `update public.tenant_product_entitlements
+          set status = 'locked'
+        where tenant_id = $1 and product_key = 'connect'`,
+      [tenantB.tenantId],
+    );
+
+    const { rows } = await withUserContext(
+      { userId: tenantA.profileId, tenantId: tenantA.tenantId },
+      (client) => client.query("select * from public.claim_due_sql_destination_syncs(20)"),
+    );
+    expect(rows.some((row) => row.destination_id === destinationA)).toBe(true);
+    expect(rows.some((row) => row.destination_id === destinationB)).toBe(false);
   });
 });

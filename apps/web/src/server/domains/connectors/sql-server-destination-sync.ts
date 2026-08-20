@@ -2,30 +2,81 @@ import { withUserContext } from "@hized/db";
 import { insertAuditLog } from "../access-control/audit";
 import { assertProductAccess } from "../products/entitlements";
 import { replaceSqlServerDestinationSnapshot } from "./sql-server-destination-api";
-import { beginSqlDestinationLoad, completeSqlDestinationLoad } from "./sql-server-destinations";
+import {
+  acquireSqlDestinationLoadLease,
+  beginSqlDestinationLoad,
+  completeSqlDestinationLoad,
+  completeSqlDestinationNoop,
+  recordSqlDestinationLoadFailure,
+} from "./sql-server-destinations";
 
 export async function syncPipelineToSqlDestination(input: {
   tenantId: string;
   actorUserId: string;
   pipelineId: string;
+  destinationId?: string;
+  leaseToken?: string;
+  triggerType?: "manual_sync" | "schedule" | "retry";
 }): Promise<{ destinationId: string; sourceRunId: string; rowsWritten: number; duplicate: boolean }> {
-  const context = await withUserContext(
-    { userId: input.actorUserId, tenantId: input.tenantId },
-    async (client) => {
-      await assertProductAccess(client, { tenantId: input.tenantId, productKey: "connect" });
-      return beginSqlDestinationLoad(client, { tenantId: input.tenantId, pipelineId: input.pipelineId });
-    },
-  );
-  if (context.alreadySucceeded) {
-    return {
-      destinationId: context.destination.id,
-      sourceRunId: context.sourceRunId,
-      rowsWritten: 0,
-      duplicate: true,
-    };
+  if (Boolean(input.leaseToken) !== Boolean(input.destinationId)) {
+    throw new Error("A scheduled SQL destination load requires both a destination and its lease token.");
   }
+  const lease = input.leaseToken && input.destinationId
+    ? { destinationId: input.destinationId, leaseToken: input.leaseToken }
+    : await withUserContext(
+        { userId: input.actorUserId, tenantId: input.tenantId },
+        async (client) => {
+          await assertProductAccess(client, { tenantId: input.tenantId, productKey: "connect" });
+          return acquireSqlDestinationLoadLease(client, { tenantId: input.tenantId, pipelineId: input.pipelineId });
+        },
+      );
+  let sourceRunId: string | null = null;
 
   try {
+    const context = await withUserContext(
+      { userId: input.actorUserId, tenantId: input.tenantId },
+      async (client) => {
+        await assertProductAccess(client, { tenantId: input.tenantId, productKey: "connect" });
+        return beginSqlDestinationLoad(client, {
+          tenantId: input.tenantId,
+          pipelineId: input.pipelineId,
+          destinationId: lease.destinationId,
+          leaseToken: lease.leaseToken,
+        });
+      },
+    );
+    sourceRunId = context.sourceRunId;
+    if (context.alreadySucceeded) {
+      await withUserContext(
+        { userId: input.actorUserId, tenantId: input.tenantId },
+        async (client) => {
+          await completeSqlDestinationNoop(client, {
+            tenantId: input.tenantId,
+            destinationId: context.destination.id,
+            leaseToken: lease.leaseToken,
+          });
+          await insertAuditLog(client, {
+            tenantId: input.tenantId,
+            actorUserId: input.actorUserId,
+            action: "connect.sql_destination_unchanged",
+            targetType: "pipeline",
+            targetId: input.pipelineId,
+            metadata: {
+              destinationId: context.destination.id,
+              sourceRunId: context.sourceRunId,
+              triggerType: input.triggerType ?? "manual_sync",
+            },
+          });
+        },
+      );
+      return {
+        destinationId: context.destination.id,
+        sourceRunId: context.sourceRunId,
+        rowsWritten: 0,
+        duplicate: true,
+      };
+    }
+
     const result = await replaceSqlServerDestinationSnapshot(context.credentials, {
       managedSchema: context.destination.targetSchema,
       targetTable: context.destination.targetTable,
@@ -41,7 +92,7 @@ export async function syncPipelineToSqlDestination(input: {
           tenantId: input.tenantId,
           destinationId: context.destination.id,
           sourceRunId: context.sourceRunId,
-          status: "succeeded",
+          leaseToken: lease.leaseToken,
           rowsWritten: result.rowsWritten,
           message: `Loaded ${result.rowsWritten} rows into ${context.destination.targetSchema}.${context.destination.targetTable}`,
         });
@@ -58,6 +109,7 @@ export async function syncPipelineToSqlDestination(input: {
             targetSchema: context.destination.targetSchema,
             targetTable: context.destination.targetTable,
             rowsWritten: result.rowsWritten,
+            triggerType: input.triggerType ?? "manual_sync",
           },
         });
       },
@@ -73,12 +125,11 @@ export async function syncPipelineToSqlDestination(input: {
     await withUserContext(
       { userId: input.actorUserId, tenantId: input.tenantId },
       async (client) => {
-        await completeSqlDestinationLoad(client, {
+        await recordSqlDestinationLoadFailure(client, {
           tenantId: input.tenantId,
-          destinationId: context.destination.id,
-          sourceRunId: context.sourceRunId,
-          status: "failed",
-          rowsWritten: 0,
+          destinationId: lease.destinationId,
+          sourceRunId,
+          leaseToken: lease.leaseToken,
           message,
         });
         await insertAuditLog(client, {
@@ -88,11 +139,9 @@ export async function syncPipelineToSqlDestination(input: {
           targetType: "pipeline",
           targetId: input.pipelineId,
           metadata: {
-            destinationId: context.destination.id,
-            connectorId: context.destination.connectorId,
-            sourceRunId: context.sourceRunId,
-            targetSchema: context.destination.targetSchema,
-            targetTable: context.destination.targetTable,
+            destinationId: lease.destinationId,
+            sourceRunId,
+            triggerType: input.triggerType ?? "manual_sync",
           },
         });
       },
