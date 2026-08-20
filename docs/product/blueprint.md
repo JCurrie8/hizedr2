@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.9 |
+| Document status | Build-ready product definition — Version 3.0 |
 
 ### Changes since v1.0
 
@@ -126,6 +126,12 @@ This specification is designed to be handed to an AI software builder, technical
 - **The SQL data foundation is point one of every Hized Advisory engagement.** Hized sells the consultant-led end-to-end package, so discovery normally selects and establishes an appropriate SQL landing/staging and curated foundation before production dashboards are built—even when the first source is Excel. Hized should prefer a fit-for-purpose free/open-source or low-cost option where it meets the client's reliability, hosting, support and scale requirements; “SQL can be free” must not be misrepresented as “production data infrastructure has no operating cost.”
 - **Direct ingestion is a product capability, not the default consulting method.** It supports migration, urgent proofs, controlled fallback and customers operating the product without a Hized-managed data-foundation engagement. Hized Advisory may deliberately approve it for an exceptional standalone dataset, but the decision and exit path are recorded rather than allowing a quick upload to become unmanaged architecture by accident.
 
+### Changes since v2.9
+
+- **Connect is the two-stage ETL control plane, not only an inbound adapter to Hized.** Its default consultant journey is source → immutable observation/validation → SQL workbench landing/staging/curation → governed SQL publication into Hized → Pulse/Canvas. This speeds up repeatable data-engineering work while preserving Hized as the permission-aware analytical serving layer.
+- **SQL Destination and SQL Source are separate security roles.** A SQL Destination loader may write only inside one dedicated Hized-managed schema and must not hold broad database roles or writes elsewhere. A separate SQL Source publisher remains read-only and selects approved curated tables/views into Hized. The same stored credential cannot serve both roles, and production publication never reads an unfinished landing table by accident.
+- **The control plane owns end-to-end lineage and stage state.** Each source observation, validation result, destination load and final Hized publication is linked through tenant-scoped runs. A failed SQL load preserves the previously successful target and governed Hized dataset; retry is idempotent. Transform authoring can begin with SQL views/scripts operated by Hized Advisory, then gain reusable templates and guided mappings without becoming an unrestricted browser SQL console.
+
 ## 1. Product definition and positioning
 
 ### 1.1 Product vision
@@ -161,7 +167,7 @@ Hized should initially be sold as a consulting implementation supported by propr
 
 ### 2.1 Hized Connect
 
-Hized Connect is the managed ETL and data-quality layer. It extracts data from source systems, validates it, transforms it into consistent structures and loads it into the Hized data foundation. It provides scheduling, retries, logging, schema-drift handling and operational monitoring.
+Hized Connect is the managed ETL control plane and data-quality layer. It extracts data from source systems, preserves immutable observations, validates them, loads them into a dedicated SQL workbench, tracks Hized-managed transformations and publishes approved SQL outputs into Hized's governed analytical foundation. It provides scheduling, retries, logging, schema-drift handling, stage lineage and operational monitoring.
 
 ### 2.2 Hized Pulse
 
@@ -351,10 +357,16 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-009 | Support several connectors and pipelines per tenant without implying that every feed must be combined. | Must | A company can ingest finance, CRM, service and spreadsheet feeds independently, then select only the sources needed by each governed dataset/KPI. |
 | CONN-010 | Provide a Hized-managed Custom ETL delivery path for unsupported sources and bespoke cross-source rules. | Should | A custom implementation is commercially distinguishable from standard Connect, versioned and supportable, but its credentials, source batches, validations, retries, lineage and run health remain visible through the ordinary Connect operating surface. |
 | CONN-011 | Send configurable operational notifications for pipeline failure, warning, stale source, schema drift, unusual or missing volume, retry exhaustion and recovery. | Must | Company Admins and Analysts can select tenant members and severity rules; duplicate retries produce one incident thread, a recovery closes it, and every attempted in-app/email delivery is auditable. |
+| CONN-012 | Configure SQL Server/Azure SQL as a governed pipeline destination. | Must | A Company Admin stores a separate encrypted loader credential scoped to one pre-created Hized-managed schema; broad database roles or effective writes outside that schema are refused. |
+| CONN-013 | Load accepted source rows into the SQL workbench before analytical publication. | Must | An authorised Analyst can send a validated file/CRM batch to a configured landing/staging table; the load is bounded, idempotent, linked to its source run and does not destroy the previous successful target on failure. |
+| CONN-014 | Publish approved SQL tables/views from the workbench into Hized through a separate read-only connection. | Must | A governed publication pipeline can select a curated SQL object, run the existing validation/lineage contract and make it available to datasets without reusing the loader credential. |
+| CONN-015 | Expose end-to-end stage lineage and readiness. | Must | The run surface distinguishes observed, validated, SQL-loaded, transformed/ready and Hized-published states, with errors and retries attached to the failing stage. |
 
 ### 5.3 Pipeline capabilities
 
 Connections and pipelines are separate concepts. A Company Admin authorises a connection and its credentials. A Company Admin or Analyst can then configure one or more pipelines over permitted source objects/files without seeing stored secrets. The guided setup sequence is source selection, schema discovery, field mapping/types, load behaviour and keys, validation, schedule/test, then an audited versioned save. This is configuration-first rather than a drag-and-drop ETL canvas.
+
+The default Hized Advisory pipeline has two explicit connection roles. Source adapters observe Salesforce, Excel, SharePoint, APIs and other systems. A SQL Destination loader writes accepted rows into one dedicated workbench schema. After Hized-managed SQL transformations are approved, a separate read-only SQL Source connection publishes selected tables/views into Hized's governed analytical layer. One pipeline screen should expose those stages without collapsing their different credentials or permissions.
 
 - Full and incremental extraction using watermark columns, timestamps, IDs or source change tracking.
 - Salesforce defaults to `SystemModstamp` (or the platform replication fallback where unavailable), a stable record ID upsert key, and a configurable rolling overlap such as the previous 24 hours. Small extracts can use REST pagination; high-volume extracts can use Bulk API 2.0 without changing downstream run semantics.

@@ -11,6 +11,7 @@ import { microsoftConnectorEnvironmentReady } from "@/server/domains/connectors/
 import { listMicrosoftConnectors } from "@/server/domains/connectors/sharepoint-connectors";
 import { listSalesforceConnectors } from "@/server/domains/connectors/salesforce-connectors";
 import { listSqlServerConnectors } from "@/server/domains/connectors/sql-server-connectors";
+import { listSqlServerDestinations } from "@/server/domains/connectors/sql-server-destinations";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { redirect } from "next/navigation";
@@ -18,6 +19,7 @@ import {
   beginMicrosoftConnectionAction,
   configureMicrosoftWorkbookAction,
   createSqlServerConnectionAction,
+  createSqlServerDestinationAction,
   createSalesforceConnectionAction,
   createManualFilePipelineAction,
   refreshSalesforceCatalogAction,
@@ -50,12 +52,13 @@ export default async function ConnectPage() {
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
-        const [connectors, filePipelines, microsoftConnectors, salesforceConnectors, sqlServerConnectors, recentRuns] = await Promise.all([
+        const [connectors, filePipelines, microsoftConnectors, salesforceConnectors, sqlServerConnectors, sqlServerDestinations, recentRuns] = await Promise.all([
           listConnectorOverview(client, { tenantId: ctx.tenant.id }),
           listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
           listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
           listSalesforceConnectors(client, { tenantId: ctx.tenant.id }),
           listSqlServerConnectors(client, { tenantId: ctx.tenant.id }),
+          listSqlServerDestinations(client, { tenantId: ctx.tenant.id }),
           listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
         ]);
         return {
@@ -64,6 +67,7 @@ export default async function ConnectPage() {
           microsoftConnectors,
           salesforceConnectors,
           sqlServerConnectors,
+          sqlServerDestinations,
           recentRuns,
         };
       },
@@ -72,7 +76,7 @@ export default async function ConnectPage() {
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   if (!connectData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
-  const { connectors, filePipelines, microsoftConnectors, salesforceConnectors, sqlServerConnectors, recentRuns } = connectData;
+  const { connectors, filePipelines, microsoftConnectors, salesforceConnectors, sqlServerConnectors, sqlServerDestinations, recentRuns } = connectData;
   const pipelineHref = (pipelineId: string) => tenantAppUrl({
     slug: ctx.tenant.slug,
     host,
@@ -104,7 +108,7 @@ export default async function ConnectPage() {
         </div>
         <div className="rounded-md border border-line bg-panel px-4 py-3 text-right">
           <div className="text-2xl font-bold text-ink">{connectors.length}</div>
-          <div className="text-xs uppercase tracking-wide text-muted">configured sources</div>
+          <div className="text-xs uppercase tracking-wide text-muted">configured connections</div>
         </div>
       </div>
 
@@ -135,15 +139,87 @@ export default async function ConnectPage() {
         ))}
       </section>
 
+      <section className="mt-8 rounded-lg border border-teal-deep bg-panel p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="font-display text-lg font-semibold text-ink">SQL workbench destination</h2>
+            <p className="mt-1 max-w-3xl text-sm text-muted">
+              Load validated source data into a dedicated landing/staging schema before you clean, join and model it. This is the writable middle stage of Sources → SQL → Hized—not the read-only publication connection below.
+            </p>
+          </div>
+          <span className="rounded bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-deep">Stage 1 · write</span>
+        </div>
+
+        {ctx.role === "company_admin" && (
+          <form action={createSqlServerDestinationAction} className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Destination name
+              <input name="name" required minLength={2} maxLength={100} placeholder="Activ8 ETL workbench" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Destination type
+              <select name="connectorType" defaultValue="sql_server" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
+                <option value="sql_server">SQL Server</option>
+                <option value="azure_sql">Azure SQL</option>
+              </select>
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Server DNS name
+              <input name="server" required placeholder="sql.activ8.example" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              TCP port
+              <input name="port" required type="number" min={1} max={65535} defaultValue={1433} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Database
+              <input name="database" required maxLength={128} placeholder="HizedWorkbench" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Managed schema
+              <input name="managedSchema" required pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" defaultValue="hized_landing" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Schema-scoped loader login
+              <input name="username" required maxLength={128} autoComplete="off" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Password
+              <input name="password" required type="password" minLength={8} maxLength={500} autoComplete="new-password" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <div className="md:col-span-2">
+              <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Test and save SQL destination</button>
+            </div>
+            <p className="text-xs text-muted md:col-span-2">
+              The loader must have CREATE TABLE plus SELECT/INSERT/UPDATE/DELETE/ALTER only on the named, pre-created schema. Hized refuses db_owner, db_datawriter, database administration and writes anywhere else. Use a different login for read-only publication.
+            </p>
+          </form>
+        )}
+
+        {sqlServerDestinations.length > 0 && (
+          <div className="mt-6 divide-y divide-line rounded border border-line bg-white">
+            {sqlServerDestinations.map((destination) => (
+              <div key={destination.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <div className="font-medium text-ink">{destination.name}</div>
+                  <div className="mt-1 text-xs text-muted">{destination.server} · {destination.database}.{destination.managedSchema} · schema-scoped loader</div>
+                </div>
+                <span className="font-mono text-xs uppercase text-muted">{destination.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="mt-8 rounded-lg border border-line bg-panel p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="font-display text-lg font-semibold text-ink">SQL Server and Azure SQL</h2>
+            <h2 className="font-display text-lg font-semibold text-ink">Publish SQL into Hized</h2>
             <p className="mt-1 max-w-3xl text-sm text-muted">
-              Connect an existing operational database or warehouse with a dedicated read-only SQL login, browse only permitted tables and views, then run bounded snapshot or watermark pipelines into Hized&apos;s governed storage.
+              After the workbench tables/views are cleaned and approved, use a separate read-only login to publish them into Hized&apos;s governed storage. This credential can never write back to SQL.
             </p>
           </div>
-          <span className="rounded bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-deep">Activ8 priority</span>
+          <span className="rounded bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-deep">Stage 2 · read</span>
         </div>
 
         {ctx.role === "company_admin" && (
@@ -471,7 +547,7 @@ export default async function ConnectPage() {
             <div key={connector.id} className="grid gap-2 border-b border-line px-4 py-4 last:border-b-0 md:grid-cols-[2fr_1fr_1fr_1fr] md:items-center">
               <div>
                 <div className="font-medium text-ink">{connector.name}</div>
-                <div className="mt-1 text-xs text-muted">{connectorLabels[connector.connectorType] ?? connector.connectorType}</div>
+                <div className="mt-1 text-xs text-muted">{connector.direction === "destination" ? "SQL workbench destination" : (connectorLabels[connector.connectorType] ?? connector.connectorType)}</div>
               </div>
               <div className="text-sm text-muted">{connector.pipelineCount} pipeline{connector.pipelineCount === 1 ? "" : "s"}</div>
               <div className="font-mono text-xs uppercase text-muted">{connector.status}</div>

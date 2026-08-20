@@ -3,10 +3,12 @@ import { headers } from "next/headers";
 import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { getPipelineBuilderConfiguration } from "@/server/domains/connectors/pipeline-configuration";
+import { getPipelineSqlDestination, listSqlServerDestinations } from "@/server/domains/connectors/sql-server-destinations";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { redirect } from "next/navigation";
 import { savePipelineConfigurationAction } from "./actions";
+import { configurePipelineSqlDestinationAction, syncPipelineToSqlDestinationAction } from "../../actions";
 
 const typeOptions = [
   ["string", "Text"],
@@ -24,22 +26,31 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
     return <div className="mx-auto w-full max-w-4xl px-6 py-10 text-sm text-muted">Pipeline configuration is available to company admins and analysts.</div>;
   }
   const { pipelineId } = await params;
-  const [configuration, requestHeaders] = await Promise.all([
+  const [pipelineData, requestHeaders] = await Promise.all([
     withUserContext(
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
-        return getPipelineBuilderConfiguration(client, { tenantId: ctx.tenant.id, pipelineId });
+        const [configuration, sqlDestinations, sqlDestination] = await Promise.all([
+          getPipelineBuilderConfiguration(client, { tenantId: ctx.tenant.id, pipelineId }),
+          listSqlServerDestinations(client, { tenantId: ctx.tenant.id }),
+          getPipelineSqlDestination(client, { tenantId: ctx.tenant.id, pipelineId }),
+        ]);
+        return { configuration, sqlDestinations, sqlDestination };
       },
     ),
     headers(),
   ]);
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
-  if (!configuration) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
+  if (!pipelineData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
+  const { configuration, sqlDestinations, sqlDestination } = pipelineData;
   const connectHref = tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/admin/connect" });
   const saveAction = savePipelineConfigurationAction.bind(null, configuration.id);
   const isSalesforce = configuration.connectorType === "salesforce";
+  const canLoadSqlWorkbench = configuration.connectorType !== "sql_server" && configuration.connectorType !== "azure_sql";
+  const configureDestinationAction = configurePipelineSqlDestinationAction.bind(null, configuration.id);
+  const suggestedTarget = configuration.name.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "source_data";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -178,6 +189,52 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
           <button type="submit" className="mt-4 rounded bg-navy px-5 py-2.5 text-sm font-semibold text-white">Save pipeline configuration</button>
         </section>
       </form>
+
+      {canLoadSqlWorkbench && (
+        <section className="mt-6 rounded-lg border border-teal-deep bg-teal-50 p-5">
+          <p className="font-mono text-xs uppercase tracking-wide text-teal-deep">SQL workbench stage</p>
+          <h2 className="mt-2 font-display text-lg font-semibold text-ink">Load validated rows into SQL</h2>
+          <p className="mt-1 max-w-3xl text-sm text-muted">
+            This sends the current accepted source state into one Hized-managed landing/staging table. Clean and model it in SQL, then publish an approved table or view back into Hized using a separate read-only SQL connection.
+          </p>
+
+          {sqlDestinations.length > 0 ? (
+            <form action={configureDestinationAction} className="mt-4 grid gap-3 sm:grid-cols-[2fr_2fr_auto] sm:items-end">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                SQL destination
+                <select name="connectorId" required defaultValue={sqlDestination?.connectorId ?? ""} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
+                  <option value="" disabled>Choose a workbench</option>
+                  {sqlDestinations.map((destination) => (
+                    <option key={destination.id} value={destination.id}>{destination.name} · {destination.database}.{destination.managedSchema}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Landing table
+                <input name="targetTable" required pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" defaultValue={sqlDestination?.targetTable ?? suggestedTarget} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+              </label>
+              <button type="submit" className="rounded border border-teal-deep bg-white px-4 py-2 text-sm font-semibold text-teal-deep">{sqlDestination ? "Update target" : "Configure target"}</button>
+            </form>
+          ) : (
+            <p className="mt-4 rounded border border-dashed border-teal-200 bg-white px-4 py-3 text-sm text-muted">A Company Admin must add the schema-scoped SQL workbench destination on the Connect page first.</p>
+          )}
+
+          {sqlDestination && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-teal-200 bg-white px-4 py-3">
+              <div className="text-sm text-muted">
+                <div><strong className="font-medium text-ink">{sqlDestination.connectorName}</strong> · {sqlDestination.targetSchema}.{sqlDestination.targetTable}</div>
+                <div className="mt-1 text-xs">{sqlDestination.lastLoadStatus ? `${sqlDestination.lastLoadStatus}${sqlDestination.lastRowsWritten === null ? "" : ` · ${sqlDestination.lastRowsWritten} rows`}` : "Not loaded yet"}{sqlDestination.lastLoadAt ? ` · ${new Date(sqlDestination.lastLoadAt).toLocaleString("en-GB")}` : ""}</div>
+                {sqlDestination.lastMessage && <div className="mt-1 text-xs">{sqlDestination.lastMessage}</div>}
+              </div>
+              <form action={syncPipelineToSqlDestinationAction}>
+                <input type="hidden" name="pipelineId" value={configuration.id} />
+                <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Load current rows to SQL</button>
+              </form>
+            </div>
+          )}
+          <p className="mt-3 text-xs text-muted">The first release uses an atomic guarded snapshot. Empty data, ownership mismatch or schema drift preserves the previous SQL target. Incremental destination upsert and automatic scheduling follow on the same run ledger.</p>
+        </section>
+      )}
     </div>
   );
 }

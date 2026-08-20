@@ -47,6 +47,12 @@ import {
   normalizeSqlServerHost,
   testSqlServerConnection,
 } from "@/server/domains/connectors/sql-server-api";
+import { testSqlServerDestination } from "@/server/domains/connectors/sql-server-destination-api";
+import {
+  configurePipelineSqlDestination,
+  createSqlServerDestination,
+} from "@/server/domains/connectors/sql-server-destinations";
+import { syncPipelineToSqlDestination } from "@/server/domains/connectors/sql-server-destination-sync";
 import {
   createSqlServerConnector,
   createSqlServerPipeline,
@@ -436,6 +442,101 @@ export async function createSqlServerConnectionAction(formData: FormData) {
     });
   });
   revalidatePath("/admin/connect");
+}
+
+export async function createSqlServerDestinationAction(formData: FormData) {
+  const ctx = await requireCompanyAdmin();
+  const name = String(formData.get("name") ?? "").trim();
+  if (name.length < 2 || name.length > 100) throw new Error("Destination name must be between 2 and 100 characters.");
+  const connectorType = String(formData.get("connectorType") ?? "sql_server") as SqlServerConnectorType;
+  if (connectorType !== "sql_server" && connectorType !== "azure_sql") throw new Error("Choose SQL Server or Azure SQL.");
+  const managedSchema = String(formData.get("managedSchema") ?? "").trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(managedSchema)) {
+    throw new Error("The managed schema must start with a letter or underscore and contain only letters, numbers and underscores.");
+  }
+  const credentials = {
+    server: normalizeSqlServerHost(String(formData.get("server") ?? "")),
+    port: Number(formData.get("port") ?? 1433),
+    database: String(formData.get("database") ?? "").trim(),
+    username: String(formData.get("username") ?? "").trim(),
+    password: String(formData.get("password") ?? ""),
+  };
+  if (!Number.isInteger(credentials.port) || credentials.port < 1 || credentials.port > 65_535) throw new Error("Enter a valid SQL Server TCP port.");
+  if (credentials.database.length < 1 || credentials.database.length > 128) throw new Error("Enter a valid database name.");
+  if (credentials.username.length < 1 || credentials.username.length > 128) throw new Error("Enter a dedicated schema-scoped SQL loader login.");
+  if (credentials.password.length < 8 || credentials.password.length > 500) throw new Error("Enter the SQL loader password.");
+  const identity = await testSqlServerDestination(credentials, managedSchema);
+
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    const created = await createSqlServerDestination(client, {
+      tenantId: ctx.tenant.id,
+      createdBy: ctx.profileId,
+      name,
+      connectorType,
+      credentials,
+      managedSchema: identity.managedSchema,
+      serverVersion: identity.serverVersion,
+    });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "connect.sql_destination_connected",
+      targetType: "connector",
+      targetId: created.connectorId,
+      metadata: {
+        connectorType,
+        server: credentials.server,
+        port: credentials.port,
+        database: identity.database,
+        managedSchema: identity.managedSchema,
+        permissionBoundary: "managed_schema_only",
+        tls: "validated",
+      },
+    });
+  });
+  revalidatePath("/admin/connect");
+}
+
+export async function configurePipelineSqlDestinationAction(pipelineId: string, formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid source pipeline.");
+  const connectorId = String(formData.get("connectorId") ?? "");
+  if (!UUID_PATTERN.test(connectorId)) throw new Error("Choose a SQL workbench destination.");
+  const targetTable = String(formData.get("targetTable") ?? "").trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(targetTable)) {
+    throw new Error("The target table must start with a letter or underscore and contain only letters, numbers and underscores.");
+  }
+  await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => {
+      const result = await configurePipelineSqlDestination(client, {
+        tenantId: ctx.tenant.id,
+        pipelineId,
+        connectorId,
+        targetTable,
+        createdBy: ctx.profileId,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "connect.sql_destination_configured",
+        targetType: "pipeline",
+        targetId: pipelineId,
+        metadata: { destinationId: result.destinationId, connectorId, targetTable, loadMode: "snapshot" },
+      });
+      return result;
+    },
+  );
+  revalidatePath(`/admin/connect/pipelines/${pipelineId}`);
+}
+
+export async function syncPipelineToSqlDestinationAction(formData: FormData) {
+  const ctx = await requireConnectOperator();
+  const pipelineId = String(formData.get("pipelineId") ?? "");
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid source pipeline.");
+  await syncPipelineToSqlDestination({ tenantId: ctx.tenant.id, actorUserId: ctx.profileId, pipelineId });
+  revalidatePath("/admin/connect");
+  revalidatePath(`/admin/connect/pipelines/${pipelineId}`);
 }
 
 export async function createSqlServerPipelineAction(connectorId: string, formData: FormData) {
