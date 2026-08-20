@@ -100,6 +100,54 @@ const verifiers = {
       run_public_exec: false,
     },
   },
+  "0037_sql_destination_scheduling.sql": {
+    query: `
+      select
+        (select count(*)::integer from public._migrations
+          where filename = $1) as ledger,
+        (select relrowsecurity from pg_class
+          where oid = 'public.pipeline_sql_destinations'::regclass) as rls,
+        (select count(*)::integer from pg_policies
+          where schemaname = 'public'
+            and tablename = 'pipeline_sql_destinations') as policies,
+        (select count(*)::integer from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'pipeline_sql_destinations'
+            and column_name in (
+              'schedule_enabled', 'schedule_interval_minutes', 'next_load_at',
+              'last_attempt_at', 'last_success_at', 'last_error',
+              'consecutive_failures', 'next_retry_at', 'lease_token',
+              'lease_expires_at'
+            )) as schedule_columns,
+        (select count(*)::integer from pg_indexes
+          where schemaname = 'public'
+            and tablename = 'pipeline_sql_destinations'
+            and indexname = 'pipeline_sql_destinations_due_idx') as due_index,
+        has_function_privilege(
+          'app_user',
+          'public.claim_due_sql_destination_syncs(integer)',
+          'execute'
+        ) as app_user_exec,
+        has_function_privilege(
+          'public',
+          'public.claim_due_sql_destination_syncs(integer)',
+          'execute'
+        ) as public_exec,
+        (select coalesce(proconfig, array[]::text[]) @> array['search_path=""']
+           from pg_proc
+          where oid = 'public.claim_due_sql_destination_syncs(integer)'::regprocedure) as fixed_search_path
+    `,
+    expected: {
+      ledger: 1,
+      rls: true,
+      policies: 1,
+      schedule_columns: 10,
+      due_index: 1,
+      app_user_exec: true,
+      public_exec: false,
+      fixed_search_path: true,
+    },
+  },
 };
 
 const verifier = verifiers[expectedMigration];

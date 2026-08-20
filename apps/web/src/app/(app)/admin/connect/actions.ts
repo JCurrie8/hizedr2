@@ -506,6 +506,11 @@ export async function configurePipelineSqlDestinationAction(pipelineId: string, 
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(targetTable)) {
     throw new Error("The target table must start with a letter or underscore and contain only letters, numbers and underscores.");
   }
+  const scheduleValue = String(formData.get("scheduleIntervalMinutes") ?? "manual");
+  const scheduleIntervalMinutes = scheduleValue === "manual" ? null : Number(scheduleValue);
+  if (scheduleIntervalMinutes !== null && ![60, 180, 360, 720, 1440].includes(scheduleIntervalMinutes)) {
+    throw new Error("Choose a supported SQL workbench delivery schedule.");
+  }
   await withUserContext(
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
     async (client) => {
@@ -515,6 +520,7 @@ export async function configurePipelineSqlDestinationAction(pipelineId: string, 
         connectorId,
         targetTable,
         createdBy: ctx.profileId,
+        scheduleIntervalMinutes,
       });
       await insertAuditLog(client, {
         tenantId: ctx.tenant.id,
@@ -522,7 +528,13 @@ export async function configurePipelineSqlDestinationAction(pipelineId: string, 
         action: "connect.sql_destination_configured",
         targetType: "pipeline",
         targetId: pipelineId,
-        metadata: { destinationId: result.destinationId, connectorId, targetTable, loadMode: "snapshot" },
+        metadata: {
+          destinationId: result.destinationId,
+          connectorId,
+          targetTable,
+          loadMode: "snapshot",
+          scheduleIntervalMinutes,
+        },
       });
       return result;
     },

@@ -51,6 +51,9 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const canLoadSqlWorkbench = configuration.connectorType !== "sql_server" && configuration.connectorType !== "azure_sql";
   const configureDestinationAction = configurePipelineSqlDestinationAction.bind(null, configuration.id);
   const suggestedTarget = configuration.name.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "source_data";
+  const sourceObserved = Boolean(configuration.lastRunStatus);
+  const sourceValidated = configuration.lastRunStatus === "succeeded" || configuration.lastRunStatus === "warning";
+  const sqlLoaded = sqlDestination?.lastLoadStatus === "succeeded";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -191,6 +194,29 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
       </form>
 
       {canLoadSqlWorkbench && (
+        <section className="mt-6 rounded-lg border border-line bg-panel p-5">
+          <p className="font-mono text-xs uppercase tracking-wide text-teal-deep">End-to-end stage status</p>
+          <h2 className="mt-2 font-display text-lg font-semibold text-ink">Source to governed Hized publication</h2>
+          <div className="mt-4 grid gap-3 md:grid-cols-5">
+            {[
+              ["1", "Observed", sourceObserved ? configuration.lastRunStatus ?? "Observed" : "Waiting for source"],
+              ["2", "Validated", sourceValidated ? (configuration.lastRunStatus === "warning" ? "Passed with warnings" : "Passed") : "Waiting"],
+              ["3", "SQL loaded", sqlLoaded ? `${sqlDestination?.lastRowsWritten ?? 0} rows` : (sqlDestination?.lastLoadStatus ?? "Not loaded")],
+              ["4", "Transformed / ready", "Not promoted yet"],
+              ["5", "Hized published", "Separate read-only pipeline"],
+            ].map(([number, label, status]) => (
+              <div key={number} className="rounded border border-line bg-white px-3 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted">Stage {number}</div>
+                <div className="mt-1 text-sm font-semibold text-ink">{label}</div>
+                <div className="mt-1 text-xs text-muted">{status}</div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted">Stages 4 and 5 remain deliberately incomplete until an approved SQL transformation or view is linked to a separate read-only Hized publication pipeline.</p>
+        </section>
+      )}
+
+      {canLoadSqlWorkbench && (
         <section className="mt-6 rounded-lg border border-teal-deep bg-teal-50 p-5">
           <p className="font-mono text-xs uppercase tracking-wide text-teal-deep">SQL workbench stage</p>
           <h2 className="mt-2 font-display text-lg font-semibold text-ink">Load validated rows into SQL</h2>
@@ -199,7 +225,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
           </p>
 
           {sqlDestinations.length > 0 ? (
-            <form action={configureDestinationAction} className="mt-4 grid gap-3 sm:grid-cols-[2fr_2fr_auto] sm:items-end">
+            <form action={configureDestinationAction} className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_2fr_1.4fr_auto] xl:items-end">
               <label className="text-xs font-semibold uppercase tracking-wide text-muted">
                 SQL destination
                 <select name="connectorId" required defaultValue={sqlDestination?.connectorId ?? ""} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
@@ -213,6 +239,17 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
                 Landing table
                 <input name="targetTable" required pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" defaultValue={sqlDestination?.targetTable ?? suggestedTarget} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
               </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Deliver accepted rows
+                <select name="scheduleIntervalMinutes" defaultValue={sqlDestination?.scheduleEnabled ? String(sqlDestination.scheduleIntervalMinutes) : "manual"} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
+                  <option value="manual">Manually only</option>
+                  <option value="60">Every hour</option>
+                  <option value="180">Every 3 hours</option>
+                  <option value="360">Every 6 hours</option>
+                  <option value="720">Every 12 hours</option>
+                  <option value="1440">Daily</option>
+                </select>
+              </label>
               <button type="submit" className="rounded border border-teal-deep bg-white px-4 py-2 text-sm font-semibold text-teal-deep">{sqlDestination ? "Update target" : "Configure target"}</button>
             </form>
           ) : (
@@ -224,7 +261,14 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
               <div className="text-sm text-muted">
                 <div><strong className="font-medium text-ink">{sqlDestination.connectorName}</strong> · {sqlDestination.targetSchema}.{sqlDestination.targetTable}</div>
                 <div className="mt-1 text-xs">{sqlDestination.lastLoadStatus ? `${sqlDestination.lastLoadStatus}${sqlDestination.lastRowsWritten === null ? "" : ` · ${sqlDestination.lastRowsWritten} rows`}` : "Not loaded yet"}{sqlDestination.lastLoadAt ? ` · ${new Date(sqlDestination.lastLoadAt).toLocaleString("en-GB")}` : ""}</div>
+                <div className="mt-1 text-xs">
+                  {sqlDestination.scheduleEnabled
+                    ? `Automatic delivery every ${sqlDestination.scheduleIntervalMinutes === 1440 ? "day" : `${sqlDestination.scheduleIntervalMinutes / 60} hour${sqlDestination.scheduleIntervalMinutes === 60 ? "" : "s"}`}${sqlDestination.nextLoadAt ? ` · next check ${new Date(sqlDestination.nextLoadAt).toLocaleString("en-GB")}` : ""}`
+                    : "Automatic delivery is off"}
+                </div>
+                {sqlDestination.nextRetryAt && <div className="mt-1 text-xs text-amber-700">Retry due {new Date(sqlDestination.nextRetryAt).toLocaleString("en-GB")} after {sqlDestination.consecutiveFailures} failed attempt{sqlDestination.consecutiveFailures === 1 ? "" : "s"}.</div>}
                 {sqlDestination.lastMessage && <div className="mt-1 text-xs">{sqlDestination.lastMessage}</div>}
+                {sqlDestination.lastError && <div className="mt-1 text-xs text-red-700">{sqlDestination.lastError}</div>}
               </div>
               <form action={syncPipelineToSqlDestinationAction}>
                 <input type="hidden" name="pipelineId" value={configuration.id} />
@@ -232,7 +276,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
               </form>
             </div>
           )}
-          <p className="mt-3 text-xs text-muted">The first release uses an atomic guarded snapshot. Empty data, ownership mismatch or schema drift preserves the previous SQL target. Incremental destination upsert and automatic scheduling follow on the same run ledger.</p>
+          <p className="mt-3 text-xs text-muted">Automatic delivery claims only a new successful source revision and retries failures with bounded backoff. Every delivery remains an atomic guarded snapshot: empty data, ownership mismatch or schema drift preserves the previous SQL target. Incremental destination upsert remains a later optimisation.</p>
         </section>
       )}
     </div>

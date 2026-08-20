@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 3.0 |
+| Document status | Build-ready product definition — Version 3.1 |
 
 ### Changes since v1.0
 
@@ -131,6 +131,11 @@ This specification is designed to be handed to an AI software builder, technical
 - **Connect is the two-stage ETL control plane, not only an inbound adapter to Hized.** Its default consultant journey is source → immutable observation/validation → SQL workbench landing/staging/curation → governed SQL publication into Hized → Pulse/Canvas. This speeds up repeatable data-engineering work while preserving Hized as the permission-aware analytical serving layer.
 - **SQL Destination and SQL Source are separate security roles.** A SQL Destination loader may write only inside one dedicated Hized-managed schema and must not hold broad database roles or writes elsewhere. A separate SQL Source publisher remains read-only and selects approved curated tables/views into Hized. The same stored credential cannot serve both roles, and production publication never reads an unfinished landing table by accident.
 - **The control plane owns end-to-end lineage and stage state.** Each source observation, validation result, destination load and final Hized publication is linked through tenant-scoped runs. A failed SQL load preserves the previously successful target and governed Hized dataset; retry is idempotent. Transform authoring can begin with SQL views/scripts operated by Hized Advisory, then gain reusable templates and guided mappings without becoming an unrestricted browser SQL console.
+
+### Changes since v3.0
+
+- **SQL workbench delivery is schedulable independently from source extraction.** An operator can leave a destination manual or select an hourly-to-daily cadence. The scheduler claims only the latest successful or warning source revision that has not already reached SQL, leases work across tenants through a narrow identifier-only function, then re-enters ordinary tenant RLS for the actual load. Failures retain the previous SQL target and retry with bounded backoff.
+- **The pipeline page exposes the complete stage journey without overstating readiness.** Observed, validated and SQL-loaded states are derived from real run ledgers. Transformation/ready and Hized-published remain visibly incomplete until an approved SQL output and separate read-only publication pipeline are linked.
 
 ## 1. Product definition and positioning
 
@@ -361,6 +366,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-013 | Load accepted source rows into the SQL workbench before analytical publication. | Must | An authorised Analyst can send a validated file/CRM batch to a configured landing/staging table; the load is bounded, idempotent, linked to its source run and does not destroy the previous successful target on failure. |
 | CONN-014 | Publish approved SQL tables/views from the workbench into Hized through a separate read-only connection. | Must | A governed publication pipeline can select a curated SQL object, run the existing validation/lineage contract and make it available to datasets without reusing the loader credential. |
 | CONN-015 | Expose end-to-end stage lineage and readiness. | Must | The run surface distinguishes observed, validated, SQL-loaded, transformed/ready and Hized-published states, with errors and retries attached to the failing stage. |
+| CONN-016 | Schedule accepted source revisions into the SQL workbench independently from source extraction. | Must | Manual, hourly, three-hourly, six-hourly, twelve-hourly and daily delivery are available; only a new successful/warning source revision is claimed, concurrent workers cannot duplicate it, failures back off safely, and disabled/suspended/unentitled tenants produce no work. |
 
 ### 5.3 Pipeline capabilities
 

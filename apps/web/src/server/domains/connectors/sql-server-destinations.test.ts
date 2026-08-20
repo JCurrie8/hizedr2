@@ -3,6 +3,7 @@ import { withUserContext } from "@hized/db";
 import { cleanupFixture, createTenantWithUser, getAdminPool, type TenantFixture } from "@hized/testing";
 import { createManualFilePipeline, getManualFilePipeline, persistManualFileRun } from "./connectors";
 import {
+  acquireSqlDestinationLoadLease,
   beginSqlDestinationLoad,
   completeSqlDestinationLoad,
   configurePipelineSqlDestination,
@@ -10,6 +11,7 @@ import {
   getPipelineSqlDestination,
   listSqlServerDestinations,
 } from "./sql-server-destinations";
+import { claimDueSqlDestinationSyncs } from "./sql-server-destination-scheduler";
 import { getSqlServerCredentials, listSqlServerConnectors } from "./sql-server-connectors";
 
 describe("SQL workbench destination persistence", () => {
@@ -91,6 +93,7 @@ describe("SQL workbench destination persistence", () => {
         connectorId: destination.connectorId,
         targetTable: "daily_operations",
         createdBy: fixture.profileId,
+        scheduleIntervalMinutes: 60,
       });
       const unrelatedSource = await createManualFilePipeline(client, {
         tenantId: fixture.tenantId,
@@ -115,9 +118,18 @@ describe("SQL workbench destination persistence", () => {
       return { ...source, ...run, ...destination, ...configured, unrelatedRunId: unrelatedRun.runId };
     });
 
+    const firstLease = await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => acquireSqlDestinationLoadLease(client, { tenantId: fixture.tenantId, pipelineId: ids.pipelineId }),
+    );
     const first = await withUserContext(
       { userId: fixture.profileId, tenantId: fixture.tenantId },
-      (client) => beginSqlDestinationLoad(client, { tenantId: fixture.tenantId, pipelineId: ids.pipelineId }),
+      (client) => beginSqlDestinationLoad(client, {
+        tenantId: fixture.tenantId,
+        pipelineId: ids.pipelineId,
+        destinationId: firstLease.destinationId,
+        leaseToken: firstLease.leaseToken,
+      }),
     );
     expect(first.alreadySucceeded).toBe(false);
     expect(first.credentials).toMatchObject({ username: "hized_loader", password: "encrypted-loader-password" });
@@ -134,12 +146,21 @@ describe("SQL workbench destination persistence", () => {
         tenantId: fixture.tenantId,
         destinationId: first.destination.id,
         sourceRunId: first.sourceRunId,
-        status: "succeeded",
+        leaseToken: firstLease.leaseToken,
         rowsWritten: 2,
         message: "Loaded 2 rows",
       });
       const current = await getPipelineSqlDestination(client, { tenantId: fixture.tenantId, pipelineId: ids.pipelineId });
-      expect(current).toMatchObject({ targetSchema: "hized_landing", targetTable: "daily_operations", lastLoadStatus: "succeeded", lastRowsWritten: 2 });
+      expect(current).toMatchObject({
+        targetSchema: "hized_landing",
+        targetTable: "daily_operations",
+        lastLoadStatus: "succeeded",
+        lastRowsWritten: 2,
+        scheduleEnabled: true,
+        scheduleIntervalMinutes: 60,
+        consecutiveFailures: 0,
+      });
+      expect(current?.nextLoadAt).not.toBeNull();
       const [listed] = await listSqlServerDestinations(client, { tenantId: fixture.tenantId });
       expect(listed).toMatchObject({ id: ids.connectorId, managedSchema: "hized_landing" });
       expect(await listSqlServerConnectors(client, { tenantId: fixture.tenantId })).toEqual([]);
@@ -163,15 +184,72 @@ describe("SQL workbench destination persistence", () => {
         connectorId: ids.connectorId,
         targetTable: "silently_repointed",
         createdBy: fixture.profileId,
+        scheduleIntervalMinutes: 60,
       }),
     )).rejects.toThrow(/cannot be silently repointed/);
 
+    const repeatedLease = await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => acquireSqlDestinationLoadLease(client, { tenantId: fixture.tenantId, pipelineId: ids.pipelineId }),
+    );
     const repeated = await withUserContext(
       { userId: fixture.profileId, tenantId: fixture.tenantId },
-      (client) => beginSqlDestinationLoad(client, { tenantId: fixture.tenantId, pipelineId: ids.pipelineId }),
+      (client) => beginSqlDestinationLoad(client, {
+        tenantId: fixture.tenantId,
+        pipelineId: ids.pipelineId,
+        destinationId: repeatedLease.destinationId,
+        leaseToken: repeatedLease.leaseToken,
+      }),
     );
     expect(repeated.alreadySucceeded).toBe(true);
     expect(repeated.records).toEqual([]);
+
+    await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      async (client) => {
+        await client.query(
+          `update public.pipeline_sql_destinations set
+             lease_token = null, lease_expires_at = null, next_load_at = now()
+           where id = $1`,
+          [first.destination.id],
+        );
+      },
+    );
+    const dueWithoutNewSource = await claimDueSqlDestinationSyncs(20);
+    expect(dueWithoutNewSource.some((job) => job.pipelineId === ids.pipelineId)).toBe(false);
+
+    await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      async (client) => {
+        const pipeline = await getManualFilePipeline(client, { tenantId: fixture.tenantId, pipelineId: ids.pipelineId });
+        await persistManualFileRun(client, {
+          tenantId: fixture.tenantId,
+          actorUserId: fixture.profileId,
+          pipeline,
+          fileName: "operations-refresh.csv",
+          contentType: "text/csv",
+          contentSha256: "c".repeat(64),
+          sizeBytes: 44,
+          storageKey: `${fixture.tenantId}/test/operations-refresh.csv`,
+          sourceModifiedAt: "2026-08-20T13:00:00.000Z",
+          table: {
+            sourceName: "operations-refresh.csv",
+            sheetName: null,
+            headers: ["Account Name", "Revenue", "Active"],
+            rows: [{ "Account Name": "North", Revenue: 1400, Active: true }],
+          },
+        });
+      },
+    );
+    const dueWithNewSource = await claimDueSqlDestinationSyncs(20);
+    expect(dueWithNewSource).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        tenantId: fixture.tenantId,
+        pipelineId: ids.pipelineId,
+        destinationId: first.destination.id,
+        actorUserId: fixture.profileId,
+      }),
+    ]));
 
     await expect(withUserContext(
       { userId: other.profileId, tenantId: other.tenantId },
