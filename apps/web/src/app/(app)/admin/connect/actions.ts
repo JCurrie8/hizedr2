@@ -42,6 +42,19 @@ import {
 } from "@/server/domains/connectors/salesforce-connectors";
 import { syncSalesforcePipeline } from "@/server/domains/connectors/salesforce-sync";
 import {
+  describeSqlServerObject,
+  discoverSqlServerObjects,
+  normalizeSqlServerHost,
+  testSqlServerConnection,
+} from "@/server/domains/connectors/sql-server-api";
+import {
+  createSqlServerConnector,
+  createSqlServerPipeline,
+  getSqlServerCredentials,
+  type SqlServerConnectorType,
+} from "@/server/domains/connectors/sql-server-connectors";
+import { syncSqlServerPipeline } from "@/server/domains/connectors/sql-server-sync";
+import {
   createR2Upload,
   deleteR2Object,
   downloadR2Object,
@@ -67,7 +80,7 @@ async function requireConnectOperator() {
 
 async function requireCompanyAdmin() {
   const ctx = await requireConnectOperator();
-  if (ctx.role !== "company_admin") throw new Error("Only a company admin can save Salesforce credentials.");
+  if (ctx.role !== "company_admin") throw new Error("Only a company admin can save connection credentials.");
   return ctx;
 }
 
@@ -372,6 +385,120 @@ export async function syncSalesforcePipelineAction(formData: FormData) {
     pipelineId,
     triggerType: "manual_sync",
   });
+  revalidatePath("/admin/connect");
+}
+
+export async function createSqlServerConnectionAction(formData: FormData) {
+  const ctx = await requireCompanyAdmin();
+  const name = String(formData.get("name") ?? "").trim();
+  if (name.length < 2 || name.length > 100) throw new Error("Connection name must be between 2 and 100 characters.");
+  const connectorType = String(formData.get("connectorType") ?? "sql_server") as SqlServerConnectorType;
+  if (connectorType !== "sql_server" && connectorType !== "azure_sql") throw new Error("Choose SQL Server or Azure SQL.");
+  const credentials = {
+    server: normalizeSqlServerHost(String(formData.get("server") ?? "")),
+    port: Number(formData.get("port") ?? 1433),
+    database: String(formData.get("database") ?? "").trim(),
+    username: String(formData.get("username") ?? "").trim(),
+    password: String(formData.get("password") ?? ""),
+  };
+  if (!Number.isInteger(credentials.port) || credentials.port < 1 || credentials.port > 65_535) throw new Error("Enter a valid SQL Server TCP port.");
+  if (credentials.database.length < 1 || credentials.database.length > 128) throw new Error("Enter a valid database name.");
+  if (credentials.username.length < 1 || credentials.username.length > 128) throw new Error("Enter a dedicated read-only SQL login.");
+  if (credentials.password.length < 8 || credentials.password.length > 500) throw new Error("Enter the SQL login password.");
+  const identity = await testSqlServerConnection(credentials);
+  const catalog = await discoverSqlServerObjects(credentials);
+  if (catalog.length === 0) throw new Error("The read-only login cannot browse any tables or views.");
+
+  await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+    const created = await createSqlServerConnector(client, {
+      tenantId: ctx.tenant.id,
+      createdBy: ctx.profileId,
+      name,
+      connectorType,
+      credentials,
+      serverVersion: identity.serverVersion,
+      catalog,
+    });
+    await insertAuditLog(client, {
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      action: "connect.sql_server_connected",
+      targetType: "connector",
+      targetId: created.connectorId,
+      metadata: {
+        connectorType,
+        server: credentials.server,
+        port: credentials.port,
+        database: identity.database,
+        visibleObjects: catalog.length,
+        tls: "validated",
+      },
+    });
+  });
+  revalidatePath("/admin/connect");
+}
+
+export async function createSqlServerPipelineAction(connectorId: string, formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (!UUID_PATTERN.test(connectorId)) throw new Error("Invalid SQL Server connection.");
+  const schema = String(formData.get("schema") ?? "").trim();
+  const object = String(formData.get("object") ?? "").trim();
+  const pipelineName = String(formData.get("pipelineName") ?? "").trim();
+  if (pipelineName.length < 2 || pipelineName.length > 100) throw new Error("Pipeline name must be between 2 and 100 characters.");
+  const selectedFields = [...new Set(formData.getAll("fields").map(String))];
+  const keyColumns = [...new Set(formData.getAll("keyColumns").map(String))];
+  const watermarkField = String(formData.get("watermarkField") ?? "").trim() || null;
+  const loadMode = String(formData.get("loadMode") ?? "snapshot");
+  if (loadMode !== "snapshot" && loadMode !== "upsert") throw new Error("Choose snapshot or upsert loading.");
+  const stored = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    (client) => getSqlServerCredentials(client, { tenantId: ctx.tenant.id, connectorId }),
+  );
+  const description = await describeSqlServerObject(stored.credentials, { schema, object });
+  const created = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => {
+      const pipeline = await createSqlServerPipeline(client, {
+        tenantId: ctx.tenant.id,
+        connectorId,
+        createdBy: ctx.profileId,
+        pipelineName,
+        description,
+        selectedFields,
+        keyColumns,
+        watermarkField,
+        loadMode,
+        overlapSeconds: watermarkField ? 86_400 : 0,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "connect.sql_server_pipeline_created",
+        targetType: "pipeline",
+        targetId: pipeline.pipelineId,
+        metadata: {
+          connectorId,
+          connectorType: stored.connectorType,
+          schema,
+          object,
+          selectedFields: selectedFields.length,
+          keyColumns,
+          watermarkField,
+          loadMode,
+        },
+      });
+      return pipeline;
+    },
+  );
+  revalidatePath("/admin/connect");
+  revalidatePath(`/admin/connect/pipelines/${created.pipelineId}`);
+}
+
+export async function syncSqlServerPipelineAction(formData: FormData) {
+  const ctx = await requireConnectOperator();
+  const pipelineId = String(formData.get("pipelineId") ?? "");
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid SQL Server pipeline.");
+  await syncSqlServerPipeline({ tenantId: ctx.tenant.id, actorUserId: ctx.profileId, pipelineId });
   revalidatePath("/admin/connect");
 }
 
