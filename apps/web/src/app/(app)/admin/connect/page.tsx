@@ -108,6 +108,19 @@ export default async function ConnectPage() {
         </div>
       </div>
 
+      <section className="mt-8 rounded-lg border border-teal-deep bg-teal-50 p-5">
+        <div className="max-w-3xl">
+          <p className="font-mono text-xs uppercase tracking-wide text-teal-deep">Hized implementation default</p>
+          <h2 className="mt-2 font-display text-lg font-semibold text-ink">Sources → SQL → Hized</h2>
+          <p className="mt-2 text-sm text-muted">
+            A Hized Advisory engagement starts by establishing the right SQL landing and curated foundation, then connecting approved tables or views to Hized. This keeps cleaning, joins, history and reusable business rules in one managed place before dashboards are built.
+          </p>
+        </div>
+        <p className="mt-4 border-t border-teal-200 pt-3 text-xs text-muted">
+          Direct CSV/XLSX, Microsoft and CRM ingestion remains available for migration, proofs and fallback. Choose one production route per dataset—never load the same records through both.
+        </p>
+      </section>
+
       <section className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           ["Files", "CSV/Excel uploads plus monitored SharePoint and OneDrive workbooks."],

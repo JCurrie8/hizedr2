@@ -7,6 +7,8 @@ This is the first real-customer proof of Hized's shared product path. It must no
 - List the Pulse decisions/KPIs Activ8 needs first, then work backwards to the smallest useful Salesforce objects, Excel/CSV files and stable keys.
 - Record source owner, business meaning, expected cadence, approximate row count, retention need and data sensitivity for each source.
 - Keep independent feeds independent until a governed KPI actually requires reconciliation. Cross-source client-specific matching is scoped as Hized-managed Custom ETL.
+- Start Activ8 **warehouse-first** as point one of the Hized Advisory engagement: Salesforce, Excel/CSV, Forms and other operational deliveries land in SQL for cleaning, history and reconciliation, then Hized reads approved tables/views. Record the SQL table/view as the governed dataset's single production source.
+- Treat direct Hized file ingestion as a migration/proof/fallback capability, not the normal consulting route. Use it only with an explicit reason and intended exit path; do not maintain both a SQL-fed and direct-fed copy of the same production dataset.
 
 ## 2. Existing SQL Server connection
 
@@ -39,6 +41,8 @@ Runtime guarantees:
 - The first REST implementation accepts at most 100,000 rows in one extraction and 250 scalar fields. Use a narrower initial-history window if the bootstrap exceeds the bound; Bulk API 2.0 is the next high-volume transport.
 
 ## 4. Analyst-delivered Excel and CSV
+
+For Activ8, files land in the SQL staging/curated process first. This is especially important for files refreshed several times per day, files joined to Salesforce data, sources needing history/deduplication, or datasets reused across several KPIs. The direct path below is a controlled migration/proof/fallback while its managed SQL pipeline is being established, not the target production architecture.
 
 1. Create a manual file pipeline with the business-facing dataset name.
 2. Choose **Replace snapshot** when each delivery is the complete current truth, **Upsert** when a stable response/record key exists, or **Append** only when every delivered row is genuinely new and immutable.
