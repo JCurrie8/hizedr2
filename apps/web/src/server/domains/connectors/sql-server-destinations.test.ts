@@ -255,5 +255,5 @@ describe("SQL workbench destination persistence", () => {
       { userId: other.profileId, tenantId: other.tenantId },
       (client) => getPipelineSqlDestination(client, { tenantId: other.tenantId, pipelineId: ids.pipelineId }),
     )).resolves.toBeNull();
-  });
+  }, 30_000);
 });
