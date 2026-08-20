@@ -10,16 +10,19 @@ import {
 import { microsoftConnectorEnvironmentReady } from "@/server/domains/connectors/microsoft-oauth";
 import { listMicrosoftConnectors } from "@/server/domains/connectors/sharepoint-connectors";
 import { listSalesforceConnectors } from "@/server/domains/connectors/salesforce-connectors";
+import { listSqlServerConnectors } from "@/server/domains/connectors/sql-server-connectors";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { redirect } from "next/navigation";
 import {
   beginMicrosoftConnectionAction,
   configureMicrosoftWorkbookAction,
+  createSqlServerConnectionAction,
   createSalesforceConnectionAction,
   createManualFilePipelineAction,
   refreshSalesforceCatalogAction,
   syncSalesforcePipelineAction,
+  syncSqlServerPipelineAction,
   syncMicrosoftWorkbookAction,
 } from "./actions";
 import { ManualUploadForm } from "./ManualUploadForm";
@@ -28,6 +31,8 @@ const connectorLabels: Record<string, string> = {
   file_upload: "CSV / Excel",
   sharepoint: "SharePoint / OneDrive",
   salesforce: "Salesforce",
+  sql_server: "SQL Server",
+  azure_sql: "Azure SQL",
   zendesk: "Zendesk",
 };
 
@@ -45,11 +50,12 @@ export default async function ConnectPage() {
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
-        const [connectors, filePipelines, microsoftConnectors, salesforceConnectors, recentRuns] = await Promise.all([
+        const [connectors, filePipelines, microsoftConnectors, salesforceConnectors, sqlServerConnectors, recentRuns] = await Promise.all([
           listConnectorOverview(client, { tenantId: ctx.tenant.id }),
           listManualFilePipelines(client, { tenantId: ctx.tenant.id }),
           listMicrosoftConnectors(client, { tenantId: ctx.tenant.id }),
           listSalesforceConnectors(client, { tenantId: ctx.tenant.id }),
+          listSqlServerConnectors(client, { tenantId: ctx.tenant.id }),
           listRecentPipelineRuns(client, { tenantId: ctx.tenant.id }),
         ]);
         return {
@@ -57,6 +63,7 @@ export default async function ConnectPage() {
           filePipelines,
           microsoftConnectors,
           salesforceConnectors,
+          sqlServerConnectors,
           recentRuns,
         };
       },
@@ -65,7 +72,7 @@ export default async function ConnectPage() {
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   if (!connectData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
-  const { connectors, filePipelines, microsoftConnectors, salesforceConnectors, recentRuns } = connectData;
+  const { connectors, filePipelines, microsoftConnectors, salesforceConnectors, sqlServerConnectors, recentRuns } = connectData;
   const pipelineHref = (pipelineId: string) => tenantAppUrl({
     slug: ctx.tenant.slug,
     host,
@@ -77,6 +84,12 @@ export default async function ConnectPage() {
     host,
     protocol,
     path: `/admin/connect/salesforce/${connectorId}`,
+  });
+  const sqlServerHref = (connectorId: string) => tenantAppUrl({
+    slug: ctx.tenant.slug,
+    host,
+    protocol,
+    path: `/admin/connect/sql-server/${connectorId}`,
   });
 
   return (
@@ -107,6 +120,95 @@ export default async function ConnectPage() {
             <p className="mt-2 text-sm text-muted">{description}</p>
           </div>
         ))}
+      </section>
+
+      <section className="mt-8 rounded-lg border border-line bg-panel p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="font-display text-lg font-semibold text-ink">SQL Server and Azure SQL</h2>
+            <p className="mt-1 max-w-3xl text-sm text-muted">
+              Connect an existing operational database or warehouse with a dedicated read-only SQL login, browse only permitted tables and views, then run bounded snapshot or watermark pipelines into Hized&apos;s governed storage.
+            </p>
+          </div>
+          <span className="rounded bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-deep">Activ8 priority</span>
+        </div>
+
+        {ctx.role === "company_admin" && (
+          <form action={createSqlServerConnectionAction} className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Connection name
+              <input name="name" required minLength={2} maxLength={100} placeholder="Activ8 reporting warehouse" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Source type
+              <select name="connectorType" defaultValue="sql_server" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
+                <option value="sql_server">SQL Server</option>
+                <option value="azure_sql">Azure SQL</option>
+              </select>
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Server DNS name
+              <input name="server" required placeholder="sql.activ8.example" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              TCP port
+              <input name="port" required type="number" min={1} max={65535} defaultValue={1433} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Database
+              <input name="database" required maxLength={128} placeholder="Reporting" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Read-only SQL login
+              <input name="username" required maxLength={128} autoComplete="off" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Password
+              <input name="password" required type="password" minLength={8} maxLength={500} autoComplete="new-password" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+            </label>
+            <div className="flex items-end">
+              <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Test, browse and save</button>
+            </div>
+            <p className="text-xs text-muted md:col-span-2">
+              TLS certificate validation is mandatory; Hized refuses db_owner, db_datawriter and CONTROL DATABASE. This hosted path requires a publicly reachable allowlisted endpoint. Private/on-premises servers will use an outbound Hized gateway—do not expose port 1433 to the internet.
+            </p>
+          </form>
+        )}
+
+        {sqlServerConnectors.length > 0 && (
+          <div className="mt-6 space-y-4">
+            {sqlServerConnectors.map((connector) => (
+              <div key={connector.id} className="rounded-md border border-line bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-ink">{connector.name}</h3>
+                    <p className="mt-1 text-xs text-muted">{connector.server} · {connector.database} · {connector.catalog.length} visible tables/views</p>
+                  </div>
+                  <Link href={sqlServerHref(connector.id)} className="rounded bg-teal-deep px-3 py-2 text-sm font-semibold text-white">Add table pipeline</Link>
+                </div>
+                {connector.pipelines.length > 0 ? (
+                  <div className="mt-4 divide-y divide-line rounded border border-line">
+                    {connector.pipelines.map((pipeline) => (
+                      <div key={pipeline.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+                        <div className="text-sm text-muted">
+                          <div><strong className="font-medium text-ink">{pipeline.name}</strong> · {pipeline.schema}.{pipeline.object}</div>
+                          <div className="mt-1 text-xs">{pipeline.loadMode} · {pipeline.lastSuccessAt ? `last successful ${new Date(pipeline.lastSuccessAt).toLocaleString("en-GB")}` : "not run yet"}</div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Link href={pipelineHref(pipeline.id)} className="rounded border border-line px-3 py-2 text-sm font-semibold text-teal-deep">Configure</Link>
+                          <form action={syncSqlServerPipelineAction}>
+                            <input type="hidden" name="pipelineId" value={pipeline.id} />
+                            <button type="submit" className="rounded bg-navy px-3 py-2 text-sm font-semibold text-white">Refresh now</button>
+                          </form>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : <p className="mt-4 text-sm text-muted">Connection tested. Add a permitted table or view pipeline to run the first extract.</p>}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="mt-8 rounded-lg border border-line bg-panel p-5">

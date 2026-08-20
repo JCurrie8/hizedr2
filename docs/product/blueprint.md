@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 2.6 |
+| Document status | Build-ready product definition — Version 2.7 |
 
 ### Changes since v1.0
 
@@ -109,6 +109,12 @@ This specification is designed to be handed to an AI software builder, technical
 - **Activ8 is the first real customer-onboarding proof, not a fork of the product.** The pilot prioritises repeatable Salesforce and analyst-delivered CSV/XLSX pipelines feeding the same tenant-isolated Connect, Pulse and Canvas contracts that later customers use. Client-specific matching or transformation remains versioned Custom ETL; no Activ8-only application branch, schema or executable upload path is permitted.
 - **Manual replacement is an explicit, guarded SQL operation.** Snapshot CSV/XLSX refreshes require the operator to confirm replacement and show the current row count. Hized replaces the governed dataset only after the incoming revision has been parsed and accepted; an empty or fully quarantined revision preserves the current dataset and records a failed run rather than silently erasing reporting data.
 - **The first Salesforce runtime profile is deliberately bounded.** Company Admins save dedicated integration-user client credentials; analysts discover permitted scalar objects/fields and configure per-object pipelines. Runs use REST `queryAll`, stable `Id` upsert, `SystemModstamp`/fallback watermarking, persisted high-water marks, a 24-hour overlap, deletion tombstones, immutable extracts and per-object leases. Extracts above the bounded REST threshold require a narrower bootstrap until Bulk API 2.0 is implemented through the same run contract.
+
+### Changes since v2.6
+
+- **An existing customer SQL warehouse is a valid pilot source.** Activ8 may initially supply its Salesforce-derived data through selected read-only SQL Server tables or views. That is a reusable SQL Server adapter path, not an Activ8-specific schema or runtime. Hized's direct Salesforce adapter remains available for reconciliation or later replacement, but one governed dataset must have one declared production source of truth so the same records are not loaded twice.
+- **Hosted database extraction has an explicit network and privilege boundary.** The first SQL Server/Azure SQL runtime accepts only TLS-valid, allowlisted public endpoints and a dedicated read-only SQL login. Hized must reject broad database ownership/write roles and must never advise a customer to expose port 1433 merely to make an on-premises source reachable. Private or VPN-only databases use a later outbound Hized gateway/agent that initiates the connection from the customer network.
+- **The first SQL extraction profile is bounded and operationally honest.** Analysts browse permitted tables/views, select scalar fields and configure either a guarded full snapshot or key-based watermark upsert. A manual extract is capped at 100,000 rows and 250 fields; scheduling and the private-network gateway follow through the same pipeline contract. Watermark extraction does not infer hard deletes: use a full snapshot, a governed soft-delete/change-tracking field or scoped Custom ETL when deletion fidelity is required.
 
 ## 1. Product definition and positioning
 
@@ -343,6 +349,8 @@ Connections and pipelines are separate concepts. A Company Admin authorises a co
 - Full and incremental extraction using watermark columns, timestamps, IDs or source change tracking.
 - Salesforce defaults to `SystemModstamp` (or the platform replication fallback where unavailable), a stable record ID upsert key, and a configurable rolling overlap such as the previous 24 hours. Small extracts can use REST pagination; high-volume extracts can use Bulk API 2.0 without changing downstream run semantics.
 - The initial hosted Salesforce adapter caps one REST extraction at 100,000 records and 250 selected scalar fields. An operator must use a bounded bootstrap window when that cap is reached; Bulk API 2.0 is the planned high-volume transport and must not alter checkpoint, validation, lineage, tombstone or curated-upsert semantics.
+- SQL Server/Azure SQL extraction uses generated `SELECT` statements over an analyst-selected table/view and scalar fields; arbitrary customer-authored SQL is not part of the self-serve path. The initial hosted runtime requires certificate-validated TLS, a dedicated read-only login and an allowlisted public hostname, caps one extract at 100,000 rows and 250 fields, and refuses broad database ownership/write roles. A customer-private endpoint uses an outbound Hized gateway rather than a publicly exposed database port.
+- A SQL pipeline declares either a full snapshot or a stable key plus supported datetime watermark with a rolling overlap. Incremental watermark extraction cannot discover a physical hard delete by itself; deletion fidelity requires a full snapshot, a governed source deletion/change-tracking field or Hized-managed Custom ETL. Direct Salesforce and a customer's Salesforce-derived SQL warehouse may coexist for comparison, but cannot both publish the same governed production dataset.
 - Zendesk uses cursor-based incremental exports where supported, persists the final `after_cursor` only when `end_of_stream` is reached, retains deletion state, and honours endpoint rate-limit / retry headers.
 - Configurable schedules with tenant time zone support.
 - Idempotent loads and safe retry behaviour.
