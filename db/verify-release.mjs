@@ -148,6 +148,71 @@ const verifiers = {
       fixed_search_path: true,
     },
   },
+  "0038_sql_transformation_versions.sql": {
+    query: `
+      select
+        (select count(*)::integer from public._migrations
+          where filename = $1) as ledger,
+        (select relrowsecurity from pg_class
+          where oid = 'public.pipeline_sql_transformation_versions'::regclass) as rls,
+        (select count(*)::integer from pg_policies
+          where schemaname = 'public'
+            and tablename = 'pipeline_sql_transformation_versions') as policies,
+        (select count(*)::integer from pg_indexes
+          where schemaname = 'public'
+            and tablename = 'pipeline_sql_transformation_versions'
+            and indexname in (
+              'pipeline_sql_transformation_versions_one_approved_idx',
+              'pipeline_sql_transformation_versions_tenant_destination_idx'
+            )) as indexes,
+        has_table_privilege('app_user', 'public.pipeline_sql_transformation_versions', 'select') as app_select,
+        has_table_privilege('app_user', 'public.pipeline_sql_transformation_versions', 'insert') as app_insert,
+        has_table_privilege('app_user', 'public.pipeline_sql_transformation_versions', 'update') as app_update,
+        has_table_privilege('app_user', 'public.pipeline_sql_transformation_versions', 'delete') as app_delete,
+        has_function_privilege(
+          'app_user',
+          'public.create_sql_transformation_version(uuid,uuid,text,text,text,jsonb,text,uuid)',
+          'execute'
+        ) as create_app_exec,
+        has_function_privilege(
+          'public',
+          'public.create_sql_transformation_version(uuid,uuid,text,text,text,jsonb,text,uuid)',
+          'execute'
+        ) as create_public_exec,
+        has_function_privilege(
+          'app_user',
+          'public.approve_sql_transformation_version(uuid,uuid,uuid)',
+          'execute'
+        ) as approve_app_exec,
+        has_function_privilege(
+          'public',
+          'public.approve_sql_transformation_version(uuid,uuid,uuid)',
+          'execute'
+        ) as approve_public_exec,
+        (select coalesce(proconfig, array[]::text[]) @> array['search_path=""']
+           from pg_proc
+          where oid = 'public.create_sql_transformation_version(uuid,uuid,text,text,text,jsonb,text,uuid)'::regprocedure) as create_fixed_path,
+        (select coalesce(proconfig, array[]::text[]) @> array['search_path=""']
+           from pg_proc
+          where oid = 'public.approve_sql_transformation_version(uuid,uuid,uuid)'::regprocedure) as approve_fixed_path
+    `,
+    expected: {
+      ledger: 1,
+      rls: true,
+      policies: 1,
+      indexes: 2,
+      app_select: true,
+      app_insert: false,
+      app_update: false,
+      app_delete: false,
+      create_app_exec: true,
+      create_public_exec: false,
+      approve_app_exec: true,
+      approve_public_exec: false,
+      create_fixed_path: true,
+      approve_fixed_path: true,
+    },
+  },
 };
 
 const verifier = verifiers[expectedMigration];

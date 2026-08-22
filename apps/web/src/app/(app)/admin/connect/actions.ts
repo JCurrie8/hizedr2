@@ -51,7 +51,15 @@ import { testSqlServerDestination } from "@/server/domains/connectors/sql-server
 import {
   configurePipelineSqlDestination,
   createSqlServerDestination,
+  getSqlDestinationValidationContext,
 } from "@/server/domains/connectors/sql-server-destinations";
+import {
+  approveSqlTransformationVersion,
+  getPipelineSqlTransformationVersion,
+  registerSqlTransformationVersion,
+  sqlTransformationColumnSignature,
+  sqlTransformationSignaturesMatch,
+} from "@/server/domains/connectors/sql-server-transformations";
 import { syncPipelineToSqlDestination } from "@/server/domains/connectors/sql-server-destination-sync";
 import {
   createSqlServerConnector,
@@ -548,6 +556,117 @@ export async function syncPipelineToSqlDestinationAction(formData: FormData) {
   if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid source pipeline.");
   await syncPipelineToSqlDestination({ tenantId: ctx.tenant.id, actorUserId: ctx.profileId, pipelineId });
   revalidatePath("/admin/connect");
+  revalidatePath(`/admin/connect/pipelines/${pipelineId}`);
+}
+
+export async function registerSqlTransformationVersionAction(pipelineId: string, formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid source pipeline.");
+  const objectSchema = String(formData.get("objectSchema") ?? "").trim();
+  const objectName = String(formData.get("objectName") ?? "").trim();
+  const changeNote = String(formData.get("changeNote") ?? "").trim();
+  const destination = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    (client) => getSqlDestinationValidationContext(client, { tenantId: ctx.tenant.id, pipelineId }),
+  );
+  if (objectSchema.toLocaleLowerCase("en-GB") !== destination.managedSchema.toLocaleLowerCase("en-GB")) {
+    throw new Error(`Register the transformed table or view inside the managed ${destination.managedSchema} schema.`);
+  }
+  if (objectName.toLocaleLowerCase("en-GB") === destination.targetTable.toLocaleLowerCase("en-GB")) {
+    throw new Error("Register a transformed table or view, not the raw landing table.");
+  }
+  const description = await describeSqlServerObject(destination.credentials, {
+    schema: objectSchema,
+    object: objectName,
+  });
+  await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => {
+      const version = await registerSqlTransformationVersion(client, {
+        tenantId: ctx.tenant.id,
+        destinationId: destination.destinationId,
+        actorUserId: ctx.profileId,
+        description,
+        changeNote,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "connect.sql_transformation_version_created",
+        targetType: "pipeline",
+        targetId: pipelineId,
+        metadata: {
+          destinationId: destination.destinationId,
+          transformationId: version.id,
+          versionNumber: version.versionNumber,
+          objectSchema: description.schema,
+          objectName: description.name,
+          objectType: description.objectType,
+          fieldCount: description.fields.length,
+        },
+      });
+      return version;
+    },
+  );
+  revalidatePath(`/admin/connect/pipelines/${pipelineId}`);
+}
+
+export async function approveSqlTransformationVersionAction(pipelineId: string, formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (ctx.role !== "company_admin") throw new Error("Only a Company Admin can approve a SQL transformation.");
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid source pipeline.");
+  const transformationId = String(formData.get("transformationId") ?? "");
+  if (!UUID_PATTERN.test(transformationId)) throw new Error("Invalid SQL transformation version.");
+  const { transformation, destination } = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => ({
+      transformation: await getPipelineSqlTransformationVersion(client, {
+        tenantId: ctx.tenant.id,
+        pipelineId,
+        transformationId,
+      }),
+      destination: await getSqlDestinationValidationContext(client, { tenantId: ctx.tenant.id, pipelineId }),
+    }),
+  );
+  if (transformation.status !== "draft") throw new Error("Only a draft SQL transformation can be approved.");
+  const currentDescription = await describeSqlServerObject(destination.credentials, {
+    schema: transformation.objectSchema,
+    object: transformation.objectName,
+  });
+  const currentSignature = sqlTransformationColumnSignature(currentDescription);
+  if (
+    currentDescription.objectType !== transformation.objectType
+    || !sqlTransformationSignaturesMatch(currentSignature, transformation.columnSignature)
+  ) {
+    throw new Error("The SQL object changed after validation. Register a new version before approval.");
+  }
+  await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => {
+      const version = await approveSqlTransformationVersion(client, {
+        tenantId: ctx.tenant.id,
+        transformationId,
+        actorUserId: ctx.profileId,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "connect.sql_transformation_approved",
+        targetType: "pipeline",
+        targetId: pipelineId,
+        metadata: {
+          destinationId: version.destinationId,
+          transformationId: version.id,
+          versionNumber: version.versionNumber,
+          objectSchema: transformation.objectSchema,
+          objectName: transformation.objectName,
+          objectType: transformation.objectType,
+          fieldCount: transformation.columnSignature.length,
+        },
+      });
+      return version;
+    },
+  );
   revalidatePath(`/admin/connect/pipelines/${pipelineId}`);
 }
 

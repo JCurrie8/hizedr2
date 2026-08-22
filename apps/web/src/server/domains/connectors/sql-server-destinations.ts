@@ -46,6 +46,14 @@ export interface SqlDestinationLoadContext {
   alreadySucceeded: boolean;
 }
 
+export interface SqlDestinationValidationContext {
+  destinationId: string;
+  connectorId: string;
+  managedSchema: string;
+  targetTable: string;
+  credentials: SqlServerCredentials;
+}
+
 function openDestinationCredentials(row: Record<string, unknown>, tenantId: string, connectorId: string): SqlServerCredentials {
   const credentials = openConnectorValue<SqlServerCredentials>(
     sealedValueFromRow(row),
@@ -258,6 +266,35 @@ export async function getPipelineSqlDestination(
     lastSuccessAt: row.last_success_at ? new Date(row.last_success_at).toISOString() : null,
     lastError: row.last_error,
     consecutiveFailures: Number(row.consecutive_failures),
+  };
+}
+
+export async function getSqlDestinationValidationContext(
+  client: PoolClient,
+  input: { tenantId: string; pipelineId: string },
+): Promise<SqlDestinationValidationContext> {
+  const { rows: [row] } = await client.query(
+    `select d.id as destination_id, d.connector_id, d.target_schema, d.target_table,
+            c.config ->> 'managedSchema' as managed_schema,
+            cc.ciphertext, cc.iv, cc.auth_tag, cc.key_version
+       from public.pipeline_sql_destinations d
+       join public.connectors c
+         on c.id = d.connector_id and c.tenant_id = d.tenant_id
+        and c.config ->> 'direction' = 'destination' and c.status = 'active'
+       join public.connector_credentials cc
+         on cc.connector_id = c.id and cc.tenant_id = c.tenant_id
+      where d.pipeline_id = $1 and d.tenant_id = $2 and d.status = 'active'`,
+    [input.pipelineId, input.tenantId],
+  );
+  if (!row || !row.managed_schema || row.managed_schema !== row.target_schema) {
+    throw new Error("The active SQL workbench destination is unavailable or its managed schema has changed.");
+  }
+  return {
+    destinationId: row.destination_id,
+    connectorId: row.connector_id,
+    managedSchema: row.managed_schema,
+    targetTable: row.target_table,
+    credentials: openDestinationCredentials(row, input.tenantId, row.connector_id),
   };
 }
 

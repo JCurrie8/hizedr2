@@ -50,7 +50,7 @@ async function main() {
       await client.query("commit");
     } catch (err) {
       await client.query("rollback");
-      console.error(`FAILED ${file}:`, err.message);
+      console.error(`FAILED ${file}:`, err.message, err.position ? `(position ${err.position})` : "");
       process.exitCode = 1;
       throw err;
     } finally {
