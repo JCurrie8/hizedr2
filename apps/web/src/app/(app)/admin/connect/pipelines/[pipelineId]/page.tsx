@@ -5,6 +5,8 @@ import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-
 import { getPipelineBuilderConfiguration } from "@/server/domains/connectors/pipeline-configuration";
 import { getPipelineSqlDestination, listSqlServerDestinations } from "@/server/domains/connectors/sql-server-destinations";
 import { listPipelineSqlTransformationVersions } from "@/server/domains/connectors/sql-server-transformations";
+import { listSqlServerConnectors } from "@/server/domains/connectors/sql-server-connectors";
+import { listSqlPublicationsForWorkbenchPipeline } from "@/server/domains/connectors/sql-server-publications";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { redirect } from "next/navigation";
@@ -12,7 +14,9 @@ import { savePipelineConfigurationAction } from "./actions";
 import {
   approveSqlTransformationVersionAction,
   configurePipelineSqlDestinationAction,
+  createApprovedSqlPublicationAction,
   registerSqlTransformationVersionAction,
+  syncApprovedSqlPublicationAction,
   syncPipelineToSqlDestinationAction,
 } from "../../actions";
 
@@ -37,13 +41,15 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
-        const [configuration, sqlDestinations, sqlDestination, sqlTransformations] = await Promise.all([
+        const [configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications] = await Promise.all([
           getPipelineBuilderConfiguration(client, { tenantId: ctx.tenant.id, pipelineId }),
           listSqlServerDestinations(client, { tenantId: ctx.tenant.id }),
           getPipelineSqlDestination(client, { tenantId: ctx.tenant.id, pipelineId }),
           listPipelineSqlTransformationVersions(client, { tenantId: ctx.tenant.id, pipelineId }),
+          listSqlServerConnectors(client, { tenantId: ctx.tenant.id }),
+          listSqlPublicationsForWorkbenchPipeline(client, { tenantId: ctx.tenant.id, workbenchPipelineId: pipelineId }),
         ]);
-        return { configuration, sqlDestinations, sqlDestination, sqlTransformations };
+        return { configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications };
       },
     ),
     headers(),
@@ -51,7 +57,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   if (!pipelineData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
-  const { configuration, sqlDestinations, sqlDestination, sqlTransformations } = pipelineData;
+  const { configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications } = pipelineData;
   const connectHref = tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/admin/connect" });
   const saveAction = savePipelineConfigurationAction.bind(null, configuration.id);
   const isSalesforce = configuration.connectorType === "salesforce";
@@ -65,6 +71,11 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const latestDraft = sqlTransformations.find((version) => version.status === "draft") ?? null;
   const registerTransformationAction = registerSqlTransformationVersionAction.bind(null, configuration.id);
   const approveTransformationAction = approveSqlTransformationVersionAction.bind(null, configuration.id);
+  const createPublicationAction = createApprovedSqlPublicationAction.bind(null, configuration.id);
+  const syncPublicationAction = syncApprovedSqlPublicationAction.bind(null, configuration.id);
+  const currentPublication = approvedTransformation
+    ? sqlPublications.find((publication) => publication.transformationId === approvedTransformation.id) ?? null
+    : null;
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -218,7 +229,11 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
                 : latestDraft
                   ? `v${latestDraft.versionNumber} awaiting approval`
                   : "Not promoted yet"],
-              ["5", "Hized published", "Separate read-only pipeline"],
+              ["5", "Hized published", currentPublication?.lastRunStatus === "succeeded" || currentPublication?.lastRunStatus === "warning"
+                ? `${currentPublication.lastRowsAccepted ?? 0} rows · v${currentPublication.transformationVersion}`
+                : currentPublication
+                  ? (currentPublication.lastRunStatus ?? "Configured, not run")
+                  : "Separate read-only pipeline"],
             ].map(([number, label, status]) => (
               <div key={number} className="rounded border border-line bg-white px-3 py-3">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted">Stage {number}</div>
@@ -353,6 +368,61 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
                 </tbody>
               </table>
             </div>
+          )}
+        </section>
+      )}
+
+      {canLoadSqlWorkbench && approvedTransformation && (
+        <section className="mt-6 rounded-lg border border-navy bg-slate-50 p-5">
+          <p className="font-mono text-xs uppercase tracking-wide text-teal-deep">Governed Hized publication</p>
+          <h2 className="mt-2 font-display text-lg font-semibold text-ink">Publish the approved SQL output into Hized</h2>
+          <p className="mt-1 max-w-3xl text-sm text-muted">
+            Stage 5 uses a separate read-only SQL connection to the same database. Hized rechecks the approved object and imports its full supported field set as a guarded snapshot; the workbench loader credential is never reused.
+          </p>
+
+          {!currentPublication && sqlSourceConnectors.length > 0 && (
+            <form action={createPublicationAction} className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[2fr_2fr_1.5fr_auto] xl:items-end">
+              <input type="hidden" name="transformationId" value={approvedTransformation.id} />
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Read-only SQL connection
+                <select name="connectorId" required defaultValue="" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
+                  <option value="" disabled>Choose a publisher</option>
+                  {sqlSourceConnectors.map((connector) => <option key={connector.id} value={connector.id}>{connector.name} · {connector.database}</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Hized pipeline name
+                <input name="pipelineName" required minLength={2} maxLength={100} defaultValue={`${configuration.name} · approved SQL`} className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Refresh Hized
+                <select name="scheduleIntervalMinutes" defaultValue="manual" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text">
+                  <option value="manual">Manually only</option><option value="60">Every hour</option><option value="180">Every 3 hours</option><option value="360">Every 6 hours</option><option value="720">Every 12 hours</option><option value="1440">Daily</option>
+                </select>
+              </label>
+              <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Configure publication</button>
+            </form>
+          )}
+          {!currentPublication && sqlSourceConnectors.length === 0 && (
+            <p className="mt-4 rounded border border-dashed border-line bg-white px-4 py-3 text-sm text-muted">Add a separate read-only SQL Server/Azure SQL connection on the Connect page before publishing this approved object.</p>
+          )}
+          {currentPublication && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-line bg-white px-4 py-3">
+              <div className="text-sm text-muted">
+                <div><strong className="font-medium text-ink">{currentPublication.pipelineName}</strong> · {currentPublication.connectorName}</div>
+                <div className="mt-1 text-xs">{currentPublication.objectSchema}.{currentPublication.objectName} · transformation v{currentPublication.transformationVersion}</div>
+                <div className="mt-1 text-xs">{currentPublication.lastRunStatus ? `${currentPublication.lastRunStatus}${currentPublication.lastRowsAccepted === null ? "" : ` · ${currentPublication.lastRowsAccepted} rows`}` : "Not published yet"}{currentPublication.lastRunAt ? ` · ${new Date(currentPublication.lastRunAt).toLocaleString("en-GB")}` : ""}</div>
+                <div className="mt-1 text-xs">{currentPublication.scheduleEnabled ? `Automatic snapshot every ${currentPublication.scheduleIntervalMinutes === 1440 ? "day" : `${currentPublication.scheduleIntervalMinutes / 60} hour${currentPublication.scheduleIntervalMinutes === 60 ? "" : "s"}`}` : "Automatic publication is off"}</div>
+                {currentPublication.lastError && <div className="mt-1 text-xs text-red-700">{currentPublication.lastError}</div>}
+              </div>
+              <form action={syncPublicationAction}>
+                <input type="hidden" name="publicationId" value={currentPublication.id} />
+                <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Publish to Hized now</button>
+              </form>
+            </div>
+          )}
+          {approvedTransformation && !currentPublication && sqlPublications.length > 0 && (
+            <p className="mt-3 text-xs text-amber-700">The approved transformation changed. Configure a new publication for v{approvedTransformation.versionNumber}; the older pipeline remains recorded and is not silently repointed.</p>
           )}
         </section>
       )}

@@ -17,6 +17,8 @@ describe("SQL workbench destination RLS", () => {
   let pipelineB: string;
   let transformationA: string;
   let transformationB: string;
+  let publicationA: string;
+  let publicationB: string;
 
   beforeAll(async () => {
     tenantA = await createTenantWithUser(admin, {
@@ -45,7 +47,8 @@ describe("SQL workbench destination RLS", () => {
       const { rows: [loader] } = await admin.query(
         `insert into public.connectors (tenant_id, connector_type, name, status, auth_mode, config, created_by)
          values ($1, 'sql_server', $2, 'active', 'connection_string',
-                 jsonb_build_object('direction', 'destination', 'managedSchema', 'hized_landing'), $3)
+                 jsonb_build_object('direction', 'destination', 'managedSchema', 'hized_landing',
+                                    'server', 'sql.example.test', 'port', 1433, 'database', 'HizedWorkbench'), $3)
          returning id`,
         [fixture.tenantId, `SQL loader ${suffix}`, fixture.profileId],
       );
@@ -100,18 +103,50 @@ describe("SQL workbench destination RLS", () => {
                  'approved', 'RLS fixture', now(), $4, $4, now()) returning id`,
         [fixture.tenantId, destination.id, `ready_${suffix}`, fixture.profileId],
       );
+      const { rows: [publisher] } = await admin.query(
+        `insert into public.connectors (tenant_id, connector_type, name, status, auth_mode, config, created_by)
+         values ($1, 'sql_server', $2, 'active', 'connection_string',
+                 jsonb_build_object('direction', 'source', 'server', 'sql.example.test',
+                                    'port', 1433, 'database', 'HizedWorkbench'), $3) returning id`,
+        [fixture.tenantId, `SQL publisher ${suffix}`, fixture.profileId],
+      );
+      await admin.query(
+        `insert into public.connector_credentials
+           (tenant_id, connector_id, ciphertext, iv, auth_tag, key_version, created_by)
+         values ($1, $2, decode(repeat('00', 32), 'hex'), decode(repeat('00', 12), 'hex'),
+                 decode(repeat('00', 16), 'hex'), 1, $3)`,
+        [fixture.tenantId, publisher.id, fixture.profileId],
+      );
+      const { rows: [publicationPipeline] } = await admin.query(
+        `insert into public.pipelines
+           (tenant_id, connector_id, name, status, source_config, load_mode, key_columns, created_by)
+         values ($1, $2, $3, 'active', jsonb_build_object(
+           'schema', 'hized_landing', 'object', $4::text, 'objectType', 'view',
+           'fields', jsonb_build_array('record_id'), 'watermarkField', null,
+           'approvedTransformationId', $5::text
+         ), 'snapshot', '{}', $6) returning id`,
+        [fixture.tenantId, publisher.id, `Publication ${suffix}`, `ready_${suffix}`, transformation.id, fixture.profileId],
+      );
+      const { rows: [publication] } = await admin.query(
+        `insert into public.pipeline_sql_publications
+           (tenant_id, transformation_id, pipeline_id, created_by)
+         values ($1, $2, $3, $4) returning id`,
+        [fixture.tenantId, transformation.id, publicationPipeline.id, fixture.profileId],
+      );
       if (fixture === tenantA) {
         destinationA = destination.id;
         runA = destinationRun.id;
         sourceA = source.id;
         pipelineA = pipeline.id;
         transformationA = transformation.id;
+        publicationA = publication.id;
       } else {
         destinationB = destination.id;
         runB = destinationRun.id;
         sourceB = source.id;
         pipelineB = pipeline.id;
         transformationB = transformation.id;
+        publicationB = publication.id;
       }
     }
   });
@@ -135,12 +170,14 @@ describe("SQL workbench destination RLS", () => {
           destinations: await client.query("select id from public.pipeline_sql_destinations").then((result) => result.rows),
           runs: await client.query("select id from public.pipeline_sql_destination_runs").then((result) => result.rows),
           transformations: await client.query("select id from public.pipeline_sql_transformation_versions").then((result) => result.rows),
+          publications: await client.query("select id from public.pipeline_sql_publications").then((result) => result.rows),
         }),
       );
       expect(scopedA).toEqual({
         destinations: [{ id: destinationA }],
         runs: [{ id: runA }],
         transformations: [{ id: transformationA }],
+        publications: [{ id: publicationA }],
       });
 
       const scopedB = await withUserContext(
@@ -149,12 +186,14 @@ describe("SQL workbench destination RLS", () => {
           destinations: await client.query("select id from public.pipeline_sql_destinations").then((result) => result.rows),
           runs: await client.query("select id from public.pipeline_sql_destination_runs").then((result) => result.rows),
           transformations: await client.query("select id from public.pipeline_sql_transformation_versions").then((result) => result.rows),
+          publications: await client.query("select id from public.pipeline_sql_publications").then((result) => result.rows),
         }),
       );
       expect(scopedB).toEqual({
         destinations: [{ id: destinationB }],
         runs: [{ id: runB }],
         transformations: [{ id: transformationB }],
+        publications: [{ id: publicationB }],
       });
     } finally {
       await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [tenantB.tenantId, tenantA.profileId]);
@@ -168,9 +207,10 @@ describe("SQL workbench destination RLS", () => {
         destinations: await client.query("select id from public.pipeline_sql_destinations").then((result) => result.rows),
         runs: await client.query("select id from public.pipeline_sql_destination_runs").then((result) => result.rows),
         transformations: await client.query("select id from public.pipeline_sql_transformation_versions").then((result) => result.rows),
+        publications: await client.query("select id from public.pipeline_sql_publications").then((result) => result.rows),
       }),
     );
-    expect(rows).toEqual({ destinations: [], runs: [], transformations: [] });
+    expect(rows).toEqual({ destinations: [], runs: [], transformations: [], publications: [] });
 
     await expect(withUserContext(
       { userId: employee.profileId, tenantId: employee.tenantId },

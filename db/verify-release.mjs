@@ -213,6 +213,59 @@ const verifiers = {
       approve_fixed_path: true,
     },
   },
+  "0039_approved_sql_publications.sql": {
+    query: `
+      select
+        (select count(*)::integer from public._migrations where filename = $1) as ledger,
+        (select relrowsecurity from pg_class where oid = 'public.pipeline_sql_publications'::regclass) as rls,
+        (select count(*)::integer from pg_policies
+          where schemaname = 'public' and tablename = 'pipeline_sql_publications') as policies,
+        (select count(*)::integer from pg_indexes
+          where schemaname = 'public' and tablename = 'pipeline_sql_publications'
+            and indexname in ('pipeline_sql_publications_tenant_idx', 'pipeline_sql_publications_due_idx')) as indexes,
+        has_function_privilege('app_user', 'public.validate_pipeline_sql_publication()', 'execute') as validate_app_exec,
+        has_function_privilege('public', 'public.validate_pipeline_sql_publication()', 'execute') as validate_public_exec,
+        has_function_privilege('app_user', 'public.claim_due_sql_publication_syncs(integer)', 'execute') as claim_app_exec,
+        has_function_privilege('public', 'public.claim_due_sql_publication_syncs(integer)', 'execute') as claim_public_exec,
+        (select count(*)::integer from pg_proc
+          where oid in (
+            'public.protect_pipeline_sql_publication_identity()'::regprocedure,
+            'public.protect_approved_sql_publication_pipeline()'::regprocedure,
+            'public.protect_approved_sql_publication_mappings()'::regprocedure
+          ) and has_function_privilege('app_user', oid, 'execute')) as protection_app_exec,
+        (select count(*)::integer from pg_proc
+          where oid in (
+            'public.protect_pipeline_sql_publication_identity()'::regprocedure,
+            'public.protect_approved_sql_publication_pipeline()'::regprocedure,
+            'public.protect_approved_sql_publication_mappings()'::regprocedure
+          ) and has_function_privilege('public', oid, 'execute')) as protection_public_exec,
+        (select count(*)::integer from pg_proc
+          where oid in (
+            'public.protect_pipeline_sql_publication_identity()'::regprocedure,
+            'public.protect_approved_sql_publication_pipeline()'::regprocedure,
+            'public.protect_approved_sql_publication_mappings()'::regprocedure
+          ) and coalesce(proconfig, array[]::text[]) @> array['search_path=""']) as protection_fixed_paths,
+        (select coalesce(proconfig, array[]::text[]) @> array['search_path=""'] from pg_proc
+          where oid = 'public.validate_pipeline_sql_publication()'::regprocedure) as validate_fixed_path,
+        (select coalesce(proconfig, array[]::text[]) @> array['search_path=""'] from pg_proc
+          where oid = 'public.claim_due_sql_publication_syncs(integer)'::regprocedure) as claim_fixed_path
+    `,
+    expected: {
+      ledger: 1,
+      rls: true,
+      policies: 3,
+      indexes: 2,
+      validate_app_exec: true,
+      validate_public_exec: false,
+      claim_app_exec: true,
+      claim_public_exec: false,
+      protection_app_exec: 3,
+      protection_public_exec: 0,
+      protection_fixed_paths: 3,
+      validate_fixed_path: true,
+      claim_fixed_path: true,
+    },
+  },
 };
 
 const verifier = verifiers[expectedMigration];

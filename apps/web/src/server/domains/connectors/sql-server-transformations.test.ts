@@ -6,6 +6,9 @@ import {
   listPipelineSqlTransformationVersions,
   registerSqlTransformationVersion,
 } from "./sql-server-transformations";
+import { createSqlServerPipeline } from "./sql-server-connectors";
+import { acquireSqlPublicationLease, createSqlPublication, listSqlPublicationsForWorkbenchPipeline } from "./sql-server-publications";
+import { claimDueSqlPublicationSyncs } from "./sql-server-publication-scheduler";
 
 describe("SQL transformation approval persistence", () => {
   const admin = getAdminPool();
@@ -13,6 +16,9 @@ describe("SQL transformation approval persistence", () => {
   let other: TenantFixture;
   let pipelineId: string;
   let destinationId: string;
+  let publisherConnectorId: string;
+  let approvedTransformationId: string;
+  let approvedPublicationId: string;
 
   beforeAll(async () => {
     fixture = await createTenantWithUser(admin, {
@@ -33,9 +39,25 @@ describe("SQL transformation approval persistence", () => {
     const { rows: [loader] } = await admin.query(
       `insert into public.connectors (tenant_id, connector_type, name, status, auth_mode, config, created_by)
        values ($1, 'sql_server', 'Transformation loader', 'active', 'connection_string',
-               jsonb_build_object('direction', 'destination', 'managedSchema', 'hized_landing'), $2)
+               jsonb_build_object('direction', 'destination', 'managedSchema', 'hized_landing',
+                                  'server', 'sql.activ8.example', 'port', 1433, 'database', 'HizedWorkbench'), $2)
        returning id`,
       [fixture.tenantId, fixture.profileId],
+    );
+    const { rows: [publisher] } = await admin.query(
+      `insert into public.connectors (tenant_id, connector_type, name, status, auth_mode, config, created_by)
+       values ($1, 'sql_server', 'Read-only publisher', 'active', 'connection_string',
+               jsonb_build_object('direction', 'source', 'server', 'sql.activ8.example',
+                                  'port', 1433, 'database', 'HizedWorkbench'), $2) returning id`,
+      [fixture.tenantId, fixture.profileId],
+    );
+    publisherConnectorId = publisher.id;
+    await admin.query(
+      `insert into public.connector_credentials
+         (tenant_id, connector_id, ciphertext, iv, auth_tag, key_version, created_by)
+       values ($1, $2, decode(repeat('00', 32), 'hex'), decode(repeat('00', 12), 'hex'),
+               decode(repeat('00', 16), 'hex'), 1, $3)`,
+      [fixture.tenantId, publisher.id, fixture.profileId],
     );
     const { rows: [pipeline] } = await admin.query(
       `insert into public.pipelines (tenant_id, connector_id, name, status, created_by)
@@ -148,6 +170,7 @@ describe("SQL transformation approval persistence", () => {
         actorUserId: fixture.profileId,
       }),
     );
+    approvedTransformationId = second.id;
     const versions = await withUserContext(
       { userId: fixture.profileId, tenantId: fixture.tenantId },
       (client) => listPipelineSqlTransformationVersions(client, { tenantId: fixture.tenantId, pipelineId }),
@@ -160,7 +183,103 @@ describe("SQL transformation approval persistence", () => {
     expect(versions[1].approvedAt).not.toBeNull();
   });
 
+  it("links only the exact approved signature through a separate read-only pipeline and claims scheduled work", async () => {
+    const badPipeline = await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => createSqlServerPipeline(client, {
+        tenantId: fixture.tenantId,
+        connectorId: publisherConnectorId,
+        createdBy: fixture.profileId,
+        pipelineName: "Unlinked publication",
+        description: description("operations_ready_v2"),
+        selectedFields: ["account_id", "revenue"],
+        keyColumns: [],
+        watermarkField: null,
+        loadMode: "snapshot",
+        overlapSeconds: 0,
+      }),
+    );
+    await expect(withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => createSqlPublication(client, {
+        tenantId: fixture.tenantId,
+        transformationId: approvedTransformationId,
+        pipelineId: badPipeline.pipelineId,
+        createdBy: fixture.profileId,
+        scheduleIntervalMinutes: 60,
+      }),
+    )).rejects.toThrow(/does not match/);
+
+    const publication = await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      async (client) => {
+        const pipeline = await createSqlServerPipeline(client, {
+          tenantId: fixture.tenantId,
+          connectorId: publisherConnectorId,
+          createdBy: fixture.profileId,
+          pipelineName: "Approved operations publication",
+          description: description("operations_ready_v2"),
+          selectedFields: ["account_id", "revenue"],
+          keyColumns: [],
+          watermarkField: null,
+          loadMode: "snapshot",
+          overlapSeconds: 0,
+          approvedTransformationId,
+        });
+        const publication = await createSqlPublication(client, {
+          tenantId: fixture.tenantId,
+          transformationId: approvedTransformationId,
+          pipelineId: pipeline.pipelineId,
+          createdBy: fixture.profileId,
+          scheduleIntervalMinutes: 60,
+        });
+        return { ...publication, pipelineId: pipeline.pipelineId };
+      },
+    );
+    approvedPublicationId = publication.publicationId;
+    const listed = await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => listSqlPublicationsForWorkbenchPipeline(client, {
+        tenantId: fixture.tenantId,
+        workbenchPipelineId: pipelineId,
+      }),
+    );
+    expect(listed).toEqual([expect.objectContaining({
+      id: publication.publicationId,
+      transformationVersion: 2,
+      pipelineName: "Approved operations publication",
+      scheduleEnabled: true,
+    })]);
+    await admin.query("update public.pipeline_sql_publications set next_sync_at = now() where id = $1", [publication.publicationId]);
+    const jobs = await claimDueSqlPublicationSyncs(20);
+    expect(jobs).toEqual(expect.arrayContaining([expect.objectContaining({
+      tenantId: fixture.tenantId,
+      publicationId: publication.publicationId,
+      connectorId: publisherConnectorId,
+    })]));
+    expect(jobs.some((job) => job.tenantId === other.tenantId)).toBe(false);
+    await expect(withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => client.query(
+        "update public.pipelines set source_config = source_config || '{\"object\":\"repointed\"}' where id = $1 and tenant_id = $2",
+        [publication.pipelineId, fixture.tenantId],
+      ),
+    )).rejects.toThrow(/cannot be repointed/);
+    await expect(withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => client.query(
+        "delete from public.pipeline_field_mappings where pipeline_id = $1 and tenant_id = $2",
+        [publication.pipelineId, fixture.tenantId],
+      ),
+    )).rejects.toThrow(/field mappings are immutable/);
+    await admin.query(
+      "update public.pipeline_sql_publications set lease_token = null, lease_expires_at = null, next_sync_at = now() + interval '1 hour' where id = $1",
+      [publication.publicationId],
+    );
+  });
+
   it("lets analysts register but never approve, and fails closed across tenants and direct writes", async () => {
+    let analystDraftId = "";
     await admin.query(
       `update public.tenant_memberships set role = 'analyst'
         where tenant_id = $1 and user_id = $2`,
@@ -177,6 +296,7 @@ describe("SQL transformation approval persistence", () => {
           changeNote: "Analyst-proposed revision",
         }),
       );
+      analystDraftId = draft.id;
       await expect(withUserContext(
         { userId: fixture.profileId, tenantId: fixture.tenantId },
         (client) => approveSqlTransformationVersion(client, {
@@ -215,5 +335,20 @@ describe("SQL transformation approval persistence", () => {
       { userId: other.profileId, tenantId: other.tenantId },
       (client) => listPipelineSqlTransformationVersions(client, { tenantId: other.tenantId, pipelineId }),
     )).resolves.toEqual([]);
+    await withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => approveSqlTransformationVersion(client, {
+        tenantId: fixture.tenantId,
+        transformationId: analystDraftId,
+        actorUserId: fixture.profileId,
+      }),
+    );
+    await expect(withUserContext(
+      { userId: fixture.profileId, tenantId: fixture.tenantId },
+      (client) => acquireSqlPublicationLease(client, {
+        tenantId: fixture.tenantId,
+        publicationId: approvedPublicationId,
+      }),
+    )).rejects.toThrow(/already running or inactive/);
   });
 });
