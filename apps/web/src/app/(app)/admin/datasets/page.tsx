@@ -28,10 +28,14 @@ function formatDateTime(value: string, timezone: string): string {
     .format(new Date(value));
 }
 
-export default async function GovernedDatasetsPage() {
+export default async function GovernedDatasetsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ pipelineId?: string | string[] }>;
+}) {
   const ctx = await getAuthContextFromRequest();
   if (ctx.kind !== "tenant") return null;
-  const requestHeaders = await headers();
+  const [requestHeaders, query] = await Promise.all([headers(), searchParams]);
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   const tenantHref = (path: string) => tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path });
@@ -49,7 +53,17 @@ export default async function GovernedDatasetsPage() {
   );
   if (!result) redirect(tenantHref("/home"));
   const { datasets, candidates } = result;
-  const publishable = candidates.filter((candidate) => candidate.publishedDatasetId === null);
+  const requestedPipelineId = typeof query.pipelineId === "string" ? query.pipelineId : null;
+  const requestedCandidate = requestedPipelineId
+    ? candidates.find((candidate) => candidate.id === requestedPipelineId) ?? null
+    : null;
+  const publishable = candidates
+    .filter((candidate) => candidate.publishedDatasetId === null)
+    .sort((left, right) => {
+      if (left.id === requestedPipelineId) return -1;
+      if (right.id === requestedPipelineId) return 1;
+      return left.name.localeCompare(right.name, "en-GB");
+    });
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
@@ -73,6 +87,12 @@ export default async function GovernedDatasetsPage() {
           contractual detail start as sensitive, and you can change every role and sensitivity decision below before any
           record is projected.
         </p>
+        {requestedCandidate?.publishedDatasetId && (
+          <div className="mt-4 rounded-lg border border-teal-deep bg-teal-50 p-4 text-sm leading-6 text-ink">
+            <strong>{requestedCandidate.name}</strong> already publishes a governed dataset. Review its field governance and
+            record projection <a href={`#dataset-${requestedCandidate.publishedDatasetId}`} className="font-semibold text-teal-deep hover:underline">below</a>.
+          </div>
+        )}
         {publishable.length === 0 ? (
           <p className="mt-4 rounded-lg border border-dashed border-line bg-canvas p-4 text-sm leading-6 text-muted">
             {candidates.length === 0
@@ -84,7 +104,12 @@ export default async function GovernedDatasetsPage() {
             {publishable.map((candidate) => {
               const derived = deriveDatasetFieldsFromPipeline(candidate.fieldMappings, candidate.keyColumns);
               return (
-                <details key={candidate.id} className="rounded-lg border border-line bg-canvas p-4">
+                <details
+                  id={`publish-${candidate.id}`}
+                  key={candidate.id}
+                  open={candidate.id === requestedPipelineId}
+                  className={`rounded-lg border bg-canvas p-4 ${candidate.id === requestedPipelineId ? "border-teal-deep ring-2 ring-teal-deep/10" : "border-line"}`}
+                >
                   <summary className="cursor-pointer font-semibold text-ink">
                     {candidate.name}
                     <span className="ml-2 font-normal text-xs text-muted">
@@ -152,7 +177,7 @@ export default async function GovernedDatasetsPage() {
             const canProject = dataset.sourcePipelineId !== null && textFields.length > 0 && timeFields.length > 0;
 
             return (
-              <article key={dataset.id} className="rounded-xl border border-line bg-panel p-5 sm:p-6">
+              <article id={`dataset-${dataset.id}`} key={dataset.id} className="scroll-mt-6 rounded-xl border border-line bg-panel p-5 sm:p-6">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">

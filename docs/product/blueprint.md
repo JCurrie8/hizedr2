@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 3.3 |
+| Document status | Build-ready product definition — Version 3.4 |
 
 ### Changes since v1.0
 
@@ -146,6 +146,11 @@ This specification is designed to be handed to an AI software builder, technical
 
 - **Approved SQL publication is a separate, immutable stage-five binding.** An operator links the currently approved transformation to a different read-only SQL connection for the same server/database. Hized revalidates the exact object type and full supported column signature before creating an all-field snapshot pipeline; the loader credential cannot be reused and linked source/mapping identity cannot be silently repointed.
 - **Read-only publication has its own schedule, lease and retry state.** Manual, hourly, three-hourly, six-hourly, twelve-hourly and daily refreshes are independent from source extraction and workbench delivery. Scheduled work stops when its transformation is superseded, Connect is locked, the tenant is suspended or the connection/pipeline becomes inactive. A new approved transformation requires an explicit new publication rather than silently changing the existing governed source.
+
+### Changes since v3.3
+
+- **A successful SQL publication hands off explicitly into analytical governance.** After the approved read-only pipeline completes, Connect takes an authorised Company Admin or Analyst directly to governed dataset setup with that tenant-owned pipeline selected. The shortcut conveys no authority: Pulse entitlement, tenant membership, operator role and RLS are rechecked on the destination route and mutation.
+- **Publication into Hized is not automatic analytical exposure.** Imported rows remain inside Connect's operator boundary until a governor confirms the dataset identity, field roles and sensitive-data defaults. If the pipeline already has a governed dataset, the handoff opens that existing governance record instead of offering a duplicate.
 
 ## 1. Product definition and positioning
 
@@ -379,6 +384,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-016 | Schedule accepted source revisions into the SQL workbench independently from source extraction. | Must | Manual, hourly, three-hourly, six-hourly, twelve-hourly and daily delivery are available; only a new successful/warning source revision is claimed, concurrent workers cannot duplicate it, failures back off safely, and disabled/suspended/unentitled tenants produce no work. |
 | CONN-017 | Version, validate and approve transformed SQL outputs before publication. | Must | After a successful landing load, a Company Admin or Analyst can register a supported table/view in the managed schema as an immutable draft; a Company Admin revalidates the same live column signature and promotes only the latest draft, atomically superseding the prior approval while retaining its audit history. The landing table itself cannot be approved and the app does not execute arbitrary SQL. |
 | CONN-018 | Schedule the approved read-only SQL publication independently from extraction and workbench loading. | Must | The exact approved object is linked immutably to a separate read-only connection for the same database, supports manual or hourly-to-daily all-field snapshots, uses leases and bounded retry, and becomes ineligible immediately when its transformation is superseded or tenant/product authority is withdrawn. |
+| CONN-019 | Hand a successful approved SQL publication into governed dataset setup. | Must | An authorised operator can continue from the stage-five run to a preselected tenant-owned pipeline; Pulse entitlement and dataset-governor authority are rechecked, sensitive fields retain safe defaults, and an existing dataset is opened rather than duplicated. |
 
 ### 5.3 Pipeline capabilities
 

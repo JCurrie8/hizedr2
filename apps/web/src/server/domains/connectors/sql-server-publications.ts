@@ -19,6 +19,7 @@ export interface PipelineSqlPublicationOverview {
   lastRunStatus: string | null;
   lastRunAt: string | null;
   lastRowsAccepted: number | null;
+  publishedDatasetId: string | null;
 }
 
 export async function createSqlPublication(
@@ -58,7 +59,8 @@ export async function listSqlPublicationsForWorkbenchPipeline(
             publication.next_sync_at, publication.last_success_at, publication.last_error,
             publication.consecutive_failures,
             latest.status as last_run_status, latest.finished_at as last_run_at,
-            latest.rows_accepted as last_rows_accepted
+            latest.rows_accepted as last_rows_accepted,
+            dataset.id as published_dataset_id
        from public.pipeline_sql_publications publication
        join public.pipeline_sql_transformation_versions transformation
          on transformation.id = publication.transformation_id
@@ -70,6 +72,8 @@ export async function listSqlPublicationsForWorkbenchPipeline(
          on pipeline.id = publication.pipeline_id and pipeline.tenant_id = publication.tenant_id
        join public.connectors connector
          on connector.id = pipeline.connector_id and connector.tenant_id = pipeline.tenant_id
+       left join public.governed_datasets dataset
+         on dataset.source_pipeline_id = pipeline.id and dataset.tenant_id = pipeline.tenant_id
        left join lateral (
          select run.status, run.finished_at, run.rows_accepted
            from public.pipeline_runs run
@@ -99,6 +103,7 @@ export async function listSqlPublicationsForWorkbenchPipeline(
     lastRunStatus: row.last_run_status,
     lastRunAt: row.last_run_at ? new Date(row.last_run_at).toISOString() : null,
     lastRowsAccepted: row.last_rows_accepted === null ? null : Number(row.last_rows_accepted),
+    publishedDatasetId: row.published_dataset_id ?? null,
   }));
 }
 

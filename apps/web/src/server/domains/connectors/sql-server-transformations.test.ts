@@ -249,6 +249,7 @@ describe("SQL transformation approval persistence", () => {
       transformationVersion: 2,
       pipelineName: "Approved operations publication",
       scheduleEnabled: true,
+      publishedDatasetId: null,
     })]);
     await admin.query("update public.pipeline_sql_publications set next_sync_at = now() where id = $1", [publication.publicationId]);
     const jobs = await claimDueSqlPublicationSyncs(20);

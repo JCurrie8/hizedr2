@@ -41,6 +41,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
+        const pulseEnabled = await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "pulse" });
         const [configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications] = await Promise.all([
           getPipelineBuilderConfiguration(client, { tenantId: ctx.tenant.id, pipelineId }),
           listSqlServerDestinations(client, { tenantId: ctx.tenant.id }),
@@ -49,7 +50,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
           listSqlServerConnectors(client, { tenantId: ctx.tenant.id }),
           listSqlPublicationsForWorkbenchPipeline(client, { tenantId: ctx.tenant.id, workbenchPipelineId: pipelineId }),
         ]);
-        return { configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications };
+        return { configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications, pulseEnabled };
       },
     ),
     headers(),
@@ -57,7 +58,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   if (!pipelineData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
-  const { configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications } = pipelineData;
+  const { configuration, sqlDestinations, sqlDestination, sqlTransformations, sqlSourceConnectors, sqlPublications, pulseEnabled } = pipelineData;
   const connectHref = tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/admin/connect" });
   const saveAction = savePipelineConfigurationAction.bind(null, configuration.id);
   const isSalesforce = configuration.connectorType === "salesforce";
@@ -75,6 +76,15 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const syncPublicationAction = syncApprovedSqlPublicationAction.bind(null, configuration.id);
   const currentPublication = approvedTransformation
     ? sqlPublications.find((publication) => publication.transformationId === approvedTransformation.id) ?? null
+    : null;
+  const publicationSucceeded = currentPublication?.lastRunStatus === "succeeded" || currentPublication?.lastRunStatus === "warning";
+  const governedDatasetHref = currentPublication
+    ? tenantAppUrl({
+      slug: ctx.tenant.slug,
+      host,
+      protocol,
+      path: `/admin/datasets?pipelineId=${encodeURIComponent(currentPublication.pipelineId)}#${currentPublication.publishedDatasetId ? `dataset-${currentPublication.publishedDatasetId}` : `publish-${currentPublication.pipelineId}`}`,
+    })
     : null;
 
   return (
@@ -407,19 +417,30 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
             <p className="mt-4 rounded border border-dashed border-line bg-white px-4 py-3 text-sm text-muted">Add a separate read-only SQL Server/Azure SQL connection on the Connect page before publishing this approved object.</p>
           )}
           {currentPublication && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-line bg-white px-4 py-3">
-              <div className="text-sm text-muted">
-                <div><strong className="font-medium text-ink">{currentPublication.pipelineName}</strong> · {currentPublication.connectorName}</div>
-                <div className="mt-1 text-xs">{currentPublication.objectSchema}.{currentPublication.objectName} · transformation v{currentPublication.transformationVersion}</div>
-                <div className="mt-1 text-xs">{currentPublication.lastRunStatus ? `${currentPublication.lastRunStatus}${currentPublication.lastRowsAccepted === null ? "" : ` · ${currentPublication.lastRowsAccepted} rows`}` : "Not published yet"}{currentPublication.lastRunAt ? ` · ${new Date(currentPublication.lastRunAt).toLocaleString("en-GB")}` : ""}</div>
-                <div className="mt-1 text-xs">{currentPublication.scheduleEnabled ? `Automatic snapshot every ${currentPublication.scheduleIntervalMinutes === 1440 ? "day" : `${currentPublication.scheduleIntervalMinutes / 60} hour${currentPublication.scheduleIntervalMinutes === 60 ? "" : "s"}`}` : "Automatic publication is off"}</div>
-                {currentPublication.lastError && <div className="mt-1 text-xs text-red-700">{currentPublication.lastError}</div>}
+            <>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-line bg-white px-4 py-3">
+                <div className="text-sm text-muted">
+                  <div><strong className="font-medium text-ink">{currentPublication.pipelineName}</strong> · {currentPublication.connectorName}</div>
+                  <div className="mt-1 text-xs">{currentPublication.objectSchema}.{currentPublication.objectName} · transformation v{currentPublication.transformationVersion}</div>
+                  <div className="mt-1 text-xs">{currentPublication.lastRunStatus ? `${currentPublication.lastRunStatus}${currentPublication.lastRowsAccepted === null ? "" : ` · ${currentPublication.lastRowsAccepted} rows`}` : "Not published yet"}{currentPublication.lastRunAt ? ` · ${new Date(currentPublication.lastRunAt).toLocaleString("en-GB")}` : ""}</div>
+                  <div className="mt-1 text-xs">{currentPublication.scheduleEnabled ? `Automatic snapshot every ${currentPublication.scheduleIntervalMinutes === 1440 ? "day" : `${currentPublication.scheduleIntervalMinutes / 60} hour${currentPublication.scheduleIntervalMinutes === 60 ? "" : "s"}`}` : "Automatic publication is off"}</div>
+                  {currentPublication.lastError && <div className="mt-1 text-xs text-red-700">{currentPublication.lastError}</div>}
+                </div>
+                <form action={syncPublicationAction}>
+                  <input type="hidden" name="publicationId" value={currentPublication.id} />
+                  <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Publish to Hized now</button>
+                </form>
               </div>
-              <form action={syncPublicationAction}>
-                <input type="hidden" name="publicationId" value={currentPublication.id} />
-                <button type="submit" className="rounded bg-navy px-4 py-2 text-sm font-semibold text-white">Publish to Hized now</button>
-              </form>
-            </div>
+              {publicationSucceeded && pulseEnabled && governedDatasetHref && (
+                <div className="mt-3 flex flex-col gap-3 rounded border border-teal-deep bg-teal-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm leading-6 text-ink">The SQL output is in Hized. Define its business name, field roles and sensitive-data boundary before Pulse or Canvas can use it.</p>
+                  <Link href={governedDatasetHref} className="shrink-0 rounded bg-teal-deep px-4 py-2 text-center text-sm font-semibold text-white">{currentPublication.publishedDatasetId ? "Manage governed dataset" : "Create governed dataset"}</Link>
+                </div>
+              )}
+              {publicationSucceeded && !pulseEnabled && (
+                <p className="mt-3 rounded border border-line bg-white px-4 py-3 text-sm leading-6 text-muted">The approved SQL output is safely stored in Hized. Activate Pulse before publishing it as a governed analytical dataset.</p>
+              )}
+            </>
           )}
           {approvedTransformation && !currentPublication && sqlPublications.length > 0 && (
             <p className="mt-3 text-xs text-amber-700">The approved transformation changed. Configure a new publication for v{approvedTransformation.versionNumber}; the older pipeline remains recorded and is not silently repointed.</p>
