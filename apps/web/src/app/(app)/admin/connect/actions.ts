@@ -62,6 +62,12 @@ import {
 } from "@/server/domains/connectors/sql-server-transformations";
 import { syncPipelineToSqlDestination } from "@/server/domains/connectors/sql-server-destination-sync";
 import {
+  acquireSqlPublicationLease,
+  completeSqlPublication,
+  createSqlPublication,
+  failSqlPublication,
+} from "@/server/domains/connectors/sql-server-publications";
+import {
   createSqlServerConnector,
   createSqlServerPipeline,
   getSqlServerCredentials,
@@ -668,6 +674,136 @@ export async function approveSqlTransformationVersionAction(pipelineId: string, 
     },
   );
   revalidatePath(`/admin/connect/pipelines/${pipelineId}`);
+}
+
+export async function createApprovedSqlPublicationAction(pipelineId: string, formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (!UUID_PATTERN.test(pipelineId)) throw new Error("Invalid source pipeline.");
+  const transformationId = String(formData.get("transformationId") ?? "");
+  const connectorId = String(formData.get("connectorId") ?? "");
+  if (!UUID_PATTERN.test(transformationId) || !UUID_PATTERN.test(connectorId)) {
+    throw new Error("Choose an approved transformation and read-only SQL connection.");
+  }
+  const pipelineName = String(formData.get("pipelineName") ?? "").trim();
+  if (pipelineName.length < 2 || pipelineName.length > 100) throw new Error("Publication pipeline name must be between 2 and 100 characters.");
+  const scheduleValue = String(formData.get("scheduleIntervalMinutes") ?? "manual");
+  const scheduleIntervalMinutes = scheduleValue === "manual" ? null : Number(scheduleValue);
+  if (scheduleIntervalMinutes !== null && ![60, 180, 360, 720, 1440].includes(scheduleIntervalMinutes)) {
+    throw new Error("Choose a supported Hized publication schedule.");
+  }
+  const { transformation, destination, publisher } = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => ({
+      transformation: await getPipelineSqlTransformationVersion(client, {
+        tenantId: ctx.tenant.id,
+        pipelineId,
+        transformationId,
+      }),
+      destination: await getSqlDestinationValidationContext(client, { tenantId: ctx.tenant.id, pipelineId }),
+      publisher: await getSqlServerCredentials(client, { tenantId: ctx.tenant.id, connectorId }),
+    }),
+  );
+  if (transformation.status !== "approved") throw new Error("Only the currently approved SQL transformation can be published.");
+  if (
+    destination.credentials.server.toLocaleLowerCase("en-GB") !== publisher.credentials.server.toLocaleLowerCase("en-GB")
+    || destination.credentials.database.toLocaleLowerCase("en-GB") !== publisher.credentials.database.toLocaleLowerCase("en-GB")
+    || destination.credentials.port !== publisher.credentials.port
+  ) {
+    throw new Error("The read-only publisher must connect to the same SQL server and database as the workbench.");
+  }
+  const description = await describeSqlServerObject(publisher.credentials, {
+    schema: transformation.objectSchema,
+    object: transformation.objectName,
+  });
+  if (
+    description.objectType !== transformation.objectType
+    || !sqlTransformationSignaturesMatch(sqlTransformationColumnSignature(description), transformation.columnSignature)
+  ) {
+    throw new Error("The read-only connection sees a different SQL object signature. Revalidate the transformation before publication.");
+  }
+  await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    async (client) => {
+      const pipeline = await createSqlServerPipeline(client, {
+        tenantId: ctx.tenant.id,
+        connectorId,
+        createdBy: ctx.profileId,
+        pipelineName,
+        description,
+        selectedFields: description.fields.map((field) => field.name),
+        keyColumns: [],
+        watermarkField: null,
+        loadMode: "snapshot",
+        overlapSeconds: 0,
+        approvedTransformationId: transformation.id,
+      });
+      const publication = await createSqlPublication(client, {
+        tenantId: ctx.tenant.id,
+        transformationId: transformation.id,
+        pipelineId: pipeline.pipelineId,
+        createdBy: ctx.profileId,
+        scheduleIntervalMinutes,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "connect.sql_publication_configured",
+        targetType: "pipeline",
+        targetId: pipeline.pipelineId,
+        metadata: {
+          sourcePipelineId: pipelineId,
+          transformationId: transformation.id,
+          transformationVersion: transformation.versionNumber,
+          publicationId: publication.publicationId,
+          connectorId,
+          scheduleIntervalMinutes,
+          loadMode: "snapshot",
+        },
+      });
+    },
+  );
+  revalidatePath(`/admin/connect/pipelines/${pipelineId}`);
+  revalidatePath("/admin/connect");
+}
+
+export async function syncApprovedSqlPublicationAction(workbenchPipelineId: string, formData: FormData) {
+  const ctx = await requireConnectOperator();
+  if (!UUID_PATTERN.test(workbenchPipelineId)) throw new Error("Invalid source pipeline.");
+  const publicationId = String(formData.get("publicationId") ?? "");
+  if (!UUID_PATTERN.test(publicationId)) throw new Error("Invalid approved SQL publication.");
+  const publication = await withUserContext(
+    { userId: ctx.profileId, tenantId: ctx.tenant.id },
+    (client) => acquireSqlPublicationLease(client, { tenantId: ctx.tenant.id, publicationId }),
+  );
+  try {
+    await syncSqlServerPipeline({
+      tenantId: ctx.tenant.id,
+      actorUserId: ctx.profileId,
+      pipelineId: publication.pipelineId,
+    });
+    await withUserContext(
+      { userId: ctx.profileId, tenantId: ctx.tenant.id },
+      (client) => completeSqlPublication(client, {
+        tenantId: ctx.tenant.id,
+        publicationId,
+        leaseToken: publication.leaseToken,
+      }),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The approved SQL publication failed.";
+    await withUserContext(
+      { userId: ctx.profileId, tenantId: ctx.tenant.id },
+      (client) => failSqlPublication(client, {
+        tenantId: ctx.tenant.id,
+        publicationId,
+        leaseToken: publication.leaseToken,
+        message,
+      }),
+    ).catch(() => {});
+    throw error;
+  }
+  revalidatePath(`/admin/connect/pipelines/${workbenchPipelineId}`);
+  revalidatePath("/admin/connect");
 }
 
 export async function createSqlServerPipelineAction(connectorId: string, formData: FormData) {

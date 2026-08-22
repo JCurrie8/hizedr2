@@ -216,6 +216,7 @@ export async function createSqlServerPipeline(
     watermarkField: string | null;
     loadMode: "snapshot" | "upsert";
     overlapSeconds: number;
+    approvedTransformationId?: string;
   },
 ): Promise<{ pipelineId: string }> {
   const { rows: [connector] } = await client.query(
@@ -251,6 +252,7 @@ export async function createSqlServerPipeline(
     objectType: input.description.objectType,
     fields: selected,
     watermarkField: input.watermarkField,
+    ...(input.approvedTransformationId ? { approvedTransformationId: input.approvedTransformationId } : {}),
   };
   const { rows: [pipeline] } = await client.query(
     `insert into public.pipelines
@@ -305,7 +307,20 @@ export async function getSqlServerSyncContext(
       where p.id = $1 and p.tenant_id = $2 and p.status = 'active'
         and c.connector_type in ('sql_server', 'azure_sql')
         and coalesce(c.config ->> 'direction', 'source') = 'source'
-        and c.status in ('active', 'error')`,
+        and c.status in ('active', 'error')
+        and (
+          not (p.source_config ? 'approvedTransformationId')
+          or exists (
+            select 1
+              from public.pipeline_sql_publications publication
+              join public.pipeline_sql_transformation_versions transformation
+                on transformation.id = publication.transformation_id
+               and transformation.tenant_id = publication.tenant_id
+             where publication.pipeline_id = p.id and publication.tenant_id = p.tenant_id
+               and transformation.status = 'approved'
+               and transformation.id::text = p.source_config ->> 'approvedTransformationId'
+          )
+        )`,
     [input.pipelineId, input.tenantId],
   );
   if (!row) throw new Error("The SQL Server pipeline was not found or is not active.");

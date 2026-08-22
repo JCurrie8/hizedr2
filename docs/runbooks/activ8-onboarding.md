@@ -37,10 +37,10 @@ grant select, insert, update, delete, alter on schema::[hized_landing] to [hized
 ### 2.3 Stage 2 — read-only SQL Source publication
 
 1. Create a different SQL user limited to `SELECT` on explicitly approved curated schemas, tables and views. The loader credential is never reused.
-2. In **Settings > Connect > Publish SQL into Hized**, save the read-only connection, browse its permitted catalogue, select only needed scalar fields and choose either **Replace snapshot** or **Watermark upsert**. Upsert requires a stable unique key and supported datetime watermark.
-3. Run **Refresh now**, reconcile extracted/accepted/quarantined counts, then publish that pipeline as the governed dataset used by Pulse and Canvas.
+2. Save the read-only connection under **Settings > Connect**, then return to the source pipeline's **Governed Hized publication** stage. Choose that publisher, name the Hized pipeline and select manual or hourly-to-daily refresh. Hized requires the same server/database as the workbench, revalidates the approved table/view and imports its complete supported field contract as a snapshot.
+3. Run **Publish to Hized now**, reconcile extracted/accepted/quarantined counts, then publish that resulting pipeline as the governed dataset used by Pulse and Canvas. A newly approved transformation version requires an explicit new publication binding; the older pipeline is retained but cannot continue once its transformation is superseded.
 
-The hosted publisher executes generated, bounded reads only: up to 100,000 rows and 250 fields per extract. It does not accept arbitrary SQL. A watermark run re-reads a 24-hour overlap and commits its checkpoint only after the complete Hized load succeeds. It cannot infer hard-deleted source rows, so use a full snapshot, an approved soft-delete/change-tracking field or scoped Custom ETL where deletion fidelity matters. SQL destination delivery now supports manual or hourly-to-daily scheduling; read-only SQL publication remains manual until its own lease/schedule slice, and the private-network gateway remains a delivery follow-on.
+The hosted publisher executes generated, bounded reads only: up to 100,000 rows and 250 fields per extract. It does not accept arbitrary SQL. Approved stage-five publication initially uses a complete snapshot so the stored Hized result exactly follows the promoted field contract; generic SQL source pipelines can still use a 24-hour-overlap watermark where separately configured. SQL destination delivery and read-only Hized publication each have independent manual/hourly-to-daily schedules and leases. The private-network gateway remains a delivery follow-on.
 
 ## 3. Direct Salesforce connection
 

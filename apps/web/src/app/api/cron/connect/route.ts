@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { claimDueSalesforceSyncs, runClaimedSalesforceSync } from "@/server/domains/connectors/salesforce-scheduler";
 import { claimDueSharePointSyncs, runClaimedSharePointSync } from "@/server/domains/connectors/sharepoint-scheduler";
 import { claimDueSqlDestinationSyncs, runClaimedSqlDestinationSync } from "@/server/domains/connectors/sql-server-destination-scheduler";
+import { claimDueSqlPublicationSyncs, runClaimedSqlPublicationSync } from "@/server/domains/connectors/sql-server-publication-scheduler";
 
 export const maxDuration = 300;
 
@@ -15,20 +16,23 @@ function authorized(request: Request): boolean {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  const [microsoftJobs, salesforceJobs, sqlDestinationJobs] = await Promise.all([
+  const [microsoftJobs, salesforceJobs, sqlDestinationJobs, sqlPublicationJobs] = await Promise.all([
     claimDueSharePointSyncs(3),
     claimDueSalesforceSyncs(3),
     claimDueSqlDestinationSyncs(3),
+    claimDueSqlPublicationSyncs(3),
   ]);
   const jobs = [
     ...microsoftJobs.map((job) => ({ provider: "microsoft" as const, job })),
     ...salesforceJobs.map((job) => ({ provider: "salesforce" as const, job })),
     ...sqlDestinationJobs.map((job) => ({ provider: "sql_destination" as const, job })),
+    ...sqlPublicationJobs.map((job) => ({ provider: "sql_publication" as const, job })),
   ];
   const results = await Promise.allSettled(jobs.map(({ provider, job }) => {
     if (provider === "microsoft") return runClaimedSharePointSync(job);
     if (provider === "salesforce") return runClaimedSalesforceSync(job);
-    return runClaimedSqlDestinationSync(job);
+    if (provider === "sql_destination") return runClaimedSqlDestinationSync(job);
+    return runClaimedSqlPublicationSync(job);
   }));
   return Response.json({
     claimed: jobs.length,
@@ -40,6 +44,8 @@ export async function GET(request: Request) {
         ? "failed"
         : provider === "sql_destination"
           ? (result.value as { duplicate: boolean }).duplicate ? "unchanged" : "loaded"
+          : provider === "sql_publication"
+            ? (result.value as { duplicate: boolean }).duplicate ? "unchanged" : "published"
           : (result.value as { outcome: string }).outcome;
       return { provider, connectorId: jobs[index]?.job.connectorId, outcome };
     }),

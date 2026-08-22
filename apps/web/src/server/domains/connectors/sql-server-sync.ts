@@ -29,6 +29,7 @@ export async function syncSqlServerPipeline(input: {
   actorUserId: string;
   pipelineId: string;
   now?: Date;
+  triggerType?: "manual_sync" | "schedule";
 }): Promise<{ runId: string; acceptedRows: number; rejectedRows: number; duplicate: boolean }> {
   const context = await withUserContext(
     { userId: input.actorUserId, tenantId: input.tenantId },
@@ -86,7 +87,7 @@ export async function syncSqlServerPipeline(input: {
       windowEndedAt: windowTo,
       cursorStart: { committedThroughAt: context.committedThroughAt, windowFrom },
       cursorEnd: { committedThroughAt: windowTo },
-      triggerType: "manual_sync" as const,
+      triggerType: input.triggerType ?? "manual_sync",
       sourceMetadata: {
         provider: context.connectorType,
         schema: context.schema,

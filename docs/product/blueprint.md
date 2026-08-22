@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 3.2 |
+| Document status | Build-ready product definition — Version 3.3 |
 
 ### Changes since v1.0
 
@@ -141,6 +141,11 @@ This specification is designed to be handed to an AI software builder, technical
 
 - **Transformation readiness is a governed promotion, not a text label.** After at least one successful workbench load, a Company Admin or Analyst can register a transformed table or view inside the managed SQL schema. Hized validates the live object type and supported column signature, creates an immutable numbered version and leaves it in draft; a Company Admin must revalidate the unchanged live object before approving it.
 - **Approval history is durable and SQL authoring remains outside the browser.** Promoting the latest draft atomically supersedes the previous approved version without erasing its approver or timestamp. Hized records identity, schema and review lineage but does not expose an arbitrary SQL console; transformations continue in customer/Hized Advisory SQL tooling. Final Hized publication still uses a separate read-only credential and pipeline.
+
+### Changes since v3.2
+
+- **Approved SQL publication is a separate, immutable stage-five binding.** An operator links the currently approved transformation to a different read-only SQL connection for the same server/database. Hized revalidates the exact object type and full supported column signature before creating an all-field snapshot pipeline; the loader credential cannot be reused and linked source/mapping identity cannot be silently repointed.
+- **Read-only publication has its own schedule, lease and retry state.** Manual, hourly, three-hourly, six-hourly, twelve-hourly and daily refreshes are independent from source extraction and workbench delivery. Scheduled work stops when its transformation is superseded, Connect is locked, the tenant is suspended or the connection/pipeline becomes inactive. A new approved transformation requires an explicit new publication rather than silently changing the existing governed source.
 
 ## 1. Product definition and positioning
 
@@ -373,6 +378,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-015 | Expose end-to-end stage lineage and readiness. | Must | The run surface distinguishes observed, validated, SQL-loaded, transformed/ready and Hized-published states, with errors and retries attached to the failing stage. |
 | CONN-016 | Schedule accepted source revisions into the SQL workbench independently from source extraction. | Must | Manual, hourly, three-hourly, six-hourly, twelve-hourly and daily delivery are available; only a new successful/warning source revision is claimed, concurrent workers cannot duplicate it, failures back off safely, and disabled/suspended/unentitled tenants produce no work. |
 | CONN-017 | Version, validate and approve transformed SQL outputs before publication. | Must | After a successful landing load, a Company Admin or Analyst can register a supported table/view in the managed schema as an immutable draft; a Company Admin revalidates the same live column signature and promotes only the latest draft, atomically superseding the prior approval while retaining its audit history. The landing table itself cannot be approved and the app does not execute arbitrary SQL. |
+| CONN-018 | Schedule the approved read-only SQL publication independently from extraction and workbench loading. | Must | The exact approved object is linked immutably to a separate read-only connection for the same database, supports manual or hourly-to-daily all-field snapshots, uses leases and bounded retry, and becomes ineligible immediately when its transformation is superseded or tenant/product authority is withdrawn. |
 
 ### 5.3 Pipeline capabilities
 
