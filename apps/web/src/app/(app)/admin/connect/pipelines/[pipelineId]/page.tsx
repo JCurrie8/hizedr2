@@ -4,11 +4,17 @@ import { withUserContext } from "@hized/db";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { getPipelineBuilderConfiguration } from "@/server/domains/connectors/pipeline-configuration";
 import { getPipelineSqlDestination, listSqlServerDestinations } from "@/server/domains/connectors/sql-server-destinations";
+import { listPipelineSqlTransformationVersions } from "@/server/domains/connectors/sql-server-transformations";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
 import { redirect } from "next/navigation";
 import { savePipelineConfigurationAction } from "./actions";
-import { configurePipelineSqlDestinationAction, syncPipelineToSqlDestinationAction } from "../../actions";
+import {
+  approveSqlTransformationVersionAction,
+  configurePipelineSqlDestinationAction,
+  registerSqlTransformationVersionAction,
+  syncPipelineToSqlDestinationAction,
+} from "../../actions";
 
 const typeOptions = [
   ["string", "Text"],
@@ -31,12 +37,13 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
       { userId: ctx.profileId, tenantId: ctx.tenant.id },
       async (client) => {
         if (!await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "connect" })) return null;
-        const [configuration, sqlDestinations, sqlDestination] = await Promise.all([
+        const [configuration, sqlDestinations, sqlDestination, sqlTransformations] = await Promise.all([
           getPipelineBuilderConfiguration(client, { tenantId: ctx.tenant.id, pipelineId }),
           listSqlServerDestinations(client, { tenantId: ctx.tenant.id }),
           getPipelineSqlDestination(client, { tenantId: ctx.tenant.id, pipelineId }),
+          listPipelineSqlTransformationVersions(client, { tenantId: ctx.tenant.id, pipelineId }),
         ]);
-        return { configuration, sqlDestinations, sqlDestination };
+        return { configuration, sqlDestinations, sqlDestination, sqlTransformations };
       },
     ),
     headers(),
@@ -44,7 +51,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const host = requestHeaders.get("host") ?? "localhost";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
   if (!pipelineData) redirect(tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/home" }));
-  const { configuration, sqlDestinations, sqlDestination } = pipelineData;
+  const { configuration, sqlDestinations, sqlDestination, sqlTransformations } = pipelineData;
   const connectHref = tenantAppUrl({ slug: ctx.tenant.slug, host, protocol, path: "/admin/connect" });
   const saveAction = savePipelineConfigurationAction.bind(null, configuration.id);
   const isSalesforce = configuration.connectorType === "salesforce";
@@ -54,6 +61,10 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
   const sourceObserved = Boolean(configuration.lastRunStatus);
   const sourceValidated = configuration.lastRunStatus === "succeeded" || configuration.lastRunStatus === "warning";
   const sqlLoaded = sqlDestination?.lastLoadStatus === "succeeded";
+  const approvedTransformation = sqlTransformations.find((version) => version.status === "approved") ?? null;
+  const latestDraft = sqlTransformations.find((version) => version.status === "draft") ?? null;
+  const registerTransformationAction = registerSqlTransformationVersionAction.bind(null, configuration.id);
+  const approveTransformationAction = approveSqlTransformationVersionAction.bind(null, configuration.id);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -202,7 +213,11 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
               ["1", "Observed", sourceObserved ? configuration.lastRunStatus ?? "Observed" : "Waiting for source"],
               ["2", "Validated", sourceValidated ? (configuration.lastRunStatus === "warning" ? "Passed with warnings" : "Passed") : "Waiting"],
               ["3", "SQL loaded", sqlLoaded ? `${sqlDestination?.lastRowsWritten ?? 0} rows` : (sqlDestination?.lastLoadStatus ?? "Not loaded")],
-              ["4", "Transformed / ready", "Not promoted yet"],
+              ["4", "Transformed / ready", approvedTransformation
+                ? `${approvedTransformation.objectSchema}.${approvedTransformation.objectName} · v${approvedTransformation.versionNumber} approved`
+                : latestDraft
+                  ? `v${latestDraft.versionNumber} awaiting approval`
+                  : "Not promoted yet"],
               ["5", "Hized published", "Separate read-only pipeline"],
             ].map(([number, label, status]) => (
               <div key={number} className="rounded border border-line bg-white px-3 py-3">
@@ -212,7 +227,7 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
               </div>
             ))}
           </div>
-          <p className="mt-3 text-xs text-muted">Stages 4 and 5 remain deliberately incomplete until an approved SQL transformation or view is linked to a separate read-only Hized publication pipeline.</p>
+          <p className="mt-3 text-xs text-muted">Stage 4 requires live SQL metadata validation and Company Admin promotion. Stage 5 remains separate so Hized can publish through a read-only connection without retaining loader permissions.</p>
         </section>
       )}
 
@@ -277,6 +292,68 @@ export default async function PipelineBuilderPage({ params }: { params: Promise<
             </div>
           )}
           <p className="mt-3 text-xs text-muted">Automatic delivery claims only a new successful source revision and retries failures with bounded backoff. Every delivery remains an atomic guarded snapshot: empty data, ownership mismatch or schema drift preserves the previous SQL target. Incremental destination upsert remains a later optimisation.</p>
+        </section>
+      )}
+
+      {canLoadSqlWorkbench && sqlDestination && (
+        <section className="mt-6 rounded-lg border border-line bg-panel p-5">
+          <p className="font-mono text-xs uppercase tracking-wide text-teal-deep">Transformation approval</p>
+          <h2 className="mt-2 font-display text-lg font-semibold text-ink">Promote a SQL table or view as ready</h2>
+          <p className="mt-1 max-w-3xl text-sm text-muted">
+            Build and test the transformation in your normal SQL tooling. Hized validates the live object and its fields, records an immutable version, then requires a Company Admin to approve it. This screen does not execute arbitrary SQL.
+          </p>
+
+          {sqlLoaded ? (
+            <form action={registerTransformationAction} className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[1.3fr_1.7fr_2.4fr_auto] xl:items-end">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Managed schema
+                <input name="objectSchema" required readOnly value={sqlDestination.targetSchema} className="mt-1 block w-full rounded border border-line bg-slate-50 px-3 py-2 text-sm font-normal normal-case tracking-normal text-muted" />
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Transformed table or view
+                <input name="objectName" required pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" placeholder="daily_operations_ready" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Version note
+                <input name="changeNote" required minLength={1} maxLength={500} placeholder="Cleaned account keys and standardised revenue" className="mt-1 block w-full rounded border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-text" />
+              </label>
+              <button type="submit" className="rounded border border-teal-deep bg-white px-4 py-2 text-sm font-semibold text-teal-deep">Validate and register</button>
+            </form>
+          ) : (
+            <p className="mt-4 rounded border border-dashed border-line bg-white px-4 py-3 text-sm text-muted">Complete a successful SQL landing load before registering a transformed object.</p>
+          )}
+
+          {sqlTransformations.length > 0 && (
+            <div className="mt-5 overflow-x-auto rounded border border-line bg-white">
+              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-muted">
+                  <tr className="border-b border-line"><th className="px-3 py-2">Version</th><th className="px-3 py-2">SQL object</th><th className="px-3 py-2">Validation</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Approval</th></tr>
+                </thead>
+                <tbody>
+                  {sqlTransformations.map((version) => (
+                    <tr key={version.id} className="border-b border-line last:border-b-0">
+                      <td className="px-3 py-3 font-semibold text-ink">v{version.versionNumber}</td>
+                      <td className="px-3 py-3"><div className="font-medium text-ink">{version.objectSchema}.{version.objectName}</div><div className="mt-1 text-xs text-muted">{version.objectType} · {version.columnSignature.length} fields · {version.changeNote}</div></td>
+                      <td className="px-3 py-3 text-xs text-muted">{new Date(version.validatedAt).toLocaleString("en-GB")}</td>
+                      <td className="px-3 py-3 text-xs font-semibold uppercase tracking-wide text-muted">{version.status}</td>
+                      <td className="px-3 py-3">
+                        {version.status === "draft" && ctx.role === "company_admin" ? (
+                          <form action={approveTransformationAction}>
+                            <input type="hidden" name="transformationId" value={version.id} />
+                            <button type="submit" className="rounded bg-navy px-3 py-2 text-xs font-semibold text-white">Recheck and approve</button>
+                          </form>
+                        ) : version.status === "draft" ? (
+                          <span className="text-xs text-muted">Company Admin required</span>
+                        ) : (
+                          <span className="text-xs text-muted">{version.approvedAt ? new Date(version.approvedAt).toLocaleString("en-GB") : "—"}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </div>

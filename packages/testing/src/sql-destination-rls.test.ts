@@ -15,6 +15,8 @@ describe("SQL workbench destination RLS", () => {
   let sourceB: string;
   let pipelineA: string;
   let pipelineB: string;
+  let transformationA: string;
+  let transformationB: string;
 
   beforeAll(async () => {
     tenantA = await createTenantWithUser(admin, {
@@ -88,16 +90,28 @@ describe("SQL workbench destination RLS", () => {
          values ($1, $2, $3, 'succeeded', 1, now()) returning id`,
         [fixture.tenantId, destination.id, sourceRun.id],
       );
+      const { rows: [transformation] } = await admin.query(
+        `insert into public.pipeline_sql_transformation_versions
+           (tenant_id, destination_id, version_number, object_schema, object_name,
+            object_type, column_signature, status, change_note, validated_at,
+            created_by, approved_by, approved_at)
+         values ($1, $2, 1, 'hized_landing', $3, 'view',
+                 '[{"name":"record_id","sqlType":"uniqueidentifier","dataType":"string","nullable":false,"primaryKey":true}]',
+                 'approved', 'RLS fixture', now(), $4, $4, now()) returning id`,
+        [fixture.tenantId, destination.id, `ready_${suffix}`, fixture.profileId],
+      );
       if (fixture === tenantA) {
         destinationA = destination.id;
         runA = destinationRun.id;
         sourceA = source.id;
         pipelineA = pipeline.id;
+        transformationA = transformation.id;
       } else {
         destinationB = destination.id;
         runB = destinationRun.id;
         sourceB = source.id;
         pipelineB = pipeline.id;
+        transformationB = transformation.id;
       }
     }
   });
@@ -120,18 +134,28 @@ describe("SQL workbench destination RLS", () => {
         async (client) => ({
           destinations: await client.query("select id from public.pipeline_sql_destinations").then((result) => result.rows),
           runs: await client.query("select id from public.pipeline_sql_destination_runs").then((result) => result.rows),
+          transformations: await client.query("select id from public.pipeline_sql_transformation_versions").then((result) => result.rows),
         }),
       );
-      expect(scopedA).toEqual({ destinations: [{ id: destinationA }], runs: [{ id: runA }] });
+      expect(scopedA).toEqual({
+        destinations: [{ id: destinationA }],
+        runs: [{ id: runA }],
+        transformations: [{ id: transformationA }],
+      });
 
       const scopedB = await withUserContext(
         { userId: tenantA.profileId, tenantId: tenantB.tenantId },
         async (client) => ({
           destinations: await client.query("select id from public.pipeline_sql_destinations").then((result) => result.rows),
           runs: await client.query("select id from public.pipeline_sql_destination_runs").then((result) => result.rows),
+          transformations: await client.query("select id from public.pipeline_sql_transformation_versions").then((result) => result.rows),
         }),
       );
-      expect(scopedB).toEqual({ destinations: [{ id: destinationB }], runs: [{ id: runB }] });
+      expect(scopedB).toEqual({
+        destinations: [{ id: destinationB }],
+        runs: [{ id: runB }],
+        transformations: [{ id: transformationB }],
+      });
     } finally {
       await admin.query("delete from public.tenant_memberships where tenant_id = $1 and user_id = $2", [tenantB.tenantId, tenantA.profileId]);
     }
@@ -143,9 +167,10 @@ describe("SQL workbench destination RLS", () => {
       async (client) => ({
         destinations: await client.query("select id from public.pipeline_sql_destinations").then((result) => result.rows),
         runs: await client.query("select id from public.pipeline_sql_destination_runs").then((result) => result.rows),
+        transformations: await client.query("select id from public.pipeline_sql_transformation_versions").then((result) => result.rows),
       }),
     );
-    expect(rows).toEqual({ destinations: [], runs: [] });
+    expect(rows).toEqual({ destinations: [], runs: [], transformations: [] });
 
     await expect(withUserContext(
       { userId: employee.profileId, tenantId: employee.tenantId },
@@ -153,6 +178,17 @@ describe("SQL workbench destination RLS", () => {
         `insert into public.pipeline_sql_destinations
            (tenant_id, pipeline_id, connector_id, target_schema, target_table, created_by)
          values ($1, gen_random_uuid(), gen_random_uuid(), 'hized_landing', 'blocked', $2)`,
+        [employee.tenantId, employee.profileId],
+      ),
+    )).rejects.toThrow();
+    await expect(withUserContext(
+      { userId: employee.profileId, tenantId: employee.tenantId },
+      (client) => client.query(
+        `insert into public.pipeline_sql_transformation_versions
+           (tenant_id, destination_id, version_number, object_schema, object_name,
+            object_type, column_signature, change_note, validated_at, created_by)
+         values ($1, gen_random_uuid(), 1, 'hized_landing', 'blocked', 'view', '[]',
+                 'blocked', now(), $2)`,
         [employee.tenantId, employee.profileId],
       ),
     )).rejects.toThrow();

@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 3.1 |
+| Document status | Build-ready product definition — Version 3.2 |
 
 ### Changes since v1.0
 
@@ -136,6 +136,11 @@ This specification is designed to be handed to an AI software builder, technical
 
 - **SQL workbench delivery is schedulable independently from source extraction.** An operator can leave a destination manual or select an hourly-to-daily cadence. The scheduler claims only the latest successful or warning source revision that has not already reached SQL, leases work across tenants through a narrow identifier-only function, then re-enters ordinary tenant RLS for the actual load. Failures retain the previous SQL target and retry with bounded backoff.
 - **The pipeline page exposes the complete stage journey without overstating readiness.** Observed, validated and SQL-loaded states are derived from real run ledgers. Transformation/ready and Hized-published remain visibly incomplete until an approved SQL output and separate read-only publication pipeline are linked.
+
+### Changes since v3.1
+
+- **Transformation readiness is a governed promotion, not a text label.** After at least one successful workbench load, a Company Admin or Analyst can register a transformed table or view inside the managed SQL schema. Hized validates the live object type and supported column signature, creates an immutable numbered version and leaves it in draft; a Company Admin must revalidate the unchanged live object before approving it.
+- **Approval history is durable and SQL authoring remains outside the browser.** Promoting the latest draft atomically supersedes the previous approved version without erasing its approver or timestamp. Hized records identity, schema and review lineage but does not expose an arbitrary SQL console; transformations continue in customer/Hized Advisory SQL tooling. Final Hized publication still uses a separate read-only credential and pipeline.
 
 ## 1. Product definition and positioning
 
@@ -367,6 +372,7 @@ Hized Connect provides a repeatable, observable route from client systems to a t
 | CONN-014 | Publish approved SQL tables/views from the workbench into Hized through a separate read-only connection. | Must | A governed publication pipeline can select a curated SQL object, run the existing validation/lineage contract and make it available to datasets without reusing the loader credential. |
 | CONN-015 | Expose end-to-end stage lineage and readiness. | Must | The run surface distinguishes observed, validated, SQL-loaded, transformed/ready and Hized-published states, with errors and retries attached to the failing stage. |
 | CONN-016 | Schedule accepted source revisions into the SQL workbench independently from source extraction. | Must | Manual, hourly, three-hourly, six-hourly, twelve-hourly and daily delivery are available; only a new successful/warning source revision is claimed, concurrent workers cannot duplicate it, failures back off safely, and disabled/suspended/unentitled tenants produce no work. |
+| CONN-017 | Version, validate and approve transformed SQL outputs before publication. | Must | After a successful landing load, a Company Admin or Analyst can register a supported table/view in the managed schema as an immutable draft; a Company Admin revalidates the same live column signature and promotes only the latest draft, atomically superseding the prior approval while retaining its audit history. The landing table itself cannot be approved and the app does not execute arbitrary SQL. |
 
 ### 5.3 Pipeline capabilities
 
