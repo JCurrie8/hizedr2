@@ -12,6 +12,8 @@ export const APP_ROLES = [
 
 export const MANAGEABLE_MEMBERSHIP_STATUSES = ["active", "suspended"] as const;
 export type ManageableMembershipStatus = (typeof MANAGEABLE_MEMBERSHIP_STATUSES)[number];
+export const CANVAS_ROLES = ["viewer", "creator"] as const;
+export type CanvasRole = (typeof CANVAS_ROLES)[number];
 
 export function isAppRole(value: string): value is AppRole {
   return (APP_ROLES as readonly string[]).includes(value);
@@ -21,6 +23,18 @@ export function isManageableMembershipStatus(value: string): value is Manageable
   return (MANAGEABLE_MEMBERSHIP_STATUSES as readonly string[]).includes(value);
 }
 
+export function isCanvasRole(value: string): value is CanvasRole {
+  return (CANVAS_ROLES as readonly string[]).includes(value);
+}
+
+export async function canCreateCanvas(client: PoolClient, tenantId: string): Promise<boolean> {
+  const { rows: [row] } = await client.query<{ allowed: boolean }>(
+    "select public.can_create_canvas($1) as allowed",
+    [tenantId],
+  );
+  return Boolean(row?.allowed);
+}
+
 export interface MembershipAccess {
   membershipId: string;
   userId: string;
@@ -28,6 +42,7 @@ export interface MembershipAccess {
   email: string;
   role: AppRole;
   status: string;
+  canvasRole: CanvasRole;
   primaryScope: {
     orgNodeId: string;
     nodeType: OrgNodeType;
@@ -42,6 +57,7 @@ interface MembershipAccessRow {
   email: string;
   role: AppRole;
   status: string;
+  canvas_role: CanvasRole;
   org_node_id: string | null;
   node_type: OrgNodeType | null;
   scope_name: string | null;
@@ -55,6 +71,7 @@ function mapMembership(row: MembershipAccessRow): MembershipAccess {
     email: row.email,
     role: row.role,
     status: row.status,
+    canvasRole: row.canvas_role,
     primaryScope:
       row.org_node_id && row.node_type && row.scope_name
         ? { orgNodeId: row.org_node_id, nodeType: row.node_type, name: row.scope_name }
@@ -79,6 +96,7 @@ export async function listMembershipAccess(
        u.email,
        m.role,
        m.status,
+       m.canvas_role,
        scope.org_node_id,
        scope.node_type,
        scope.scope_name
@@ -121,6 +139,7 @@ export async function updateMembershipAccess(
     membershipId: string;
     role: AppRole;
     status: ManageableMembershipStatus;
+    canvasRole?: CanvasRole;
     orgNodeId?: string;
   },
 ): Promise<MembershipAccess> {
@@ -175,9 +194,9 @@ export async function updateMembershipAccess(
 
   await client.query(
     `update public.tenant_memberships
-     set role = $1, status = $2, updated_at = now()
+     set role = $1, status = $2, canvas_role = coalesce($5, canvas_role), updated_at = now()
      where id = $3 and tenant_id = $4`,
-    [opts.role, opts.status, opts.membershipId, opts.tenantId],
+    [opts.role, opts.status, opts.membershipId, opts.tenantId, opts.canvasRole ?? null],
   );
 
   await client.query(

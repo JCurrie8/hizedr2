@@ -7,6 +7,7 @@ import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-
 import { insertAuditLog } from "@/server/domains/access-control/audit";
 import {
   isAppRole,
+  isCanvasRole,
   isManageableMembershipStatus,
   updateMembershipAccess,
 } from "@/server/domains/access-control/membership-access";
@@ -90,12 +91,14 @@ export async function updateMemberAccessAction(
   const membershipId = String(formData.get("membershipId") ?? "");
   const roleValue = String(formData.get("role") ?? "");
   const statusValue = String(formData.get("status") ?? "");
+  const canvasRoleValue = String(formData.get("canvasRole") ?? "");
   const orgNodeId = String(formData.get("orgNodeId") ?? "") || undefined;
   if (!membershipId) return { saved: false, error: "Member is required." };
   if (!isAppRole(roleValue)) return { saved: false, error: "Choose a valid role." };
   if (!isManageableMembershipStatus(statusValue)) {
     return { saved: false, error: "Choose a valid membership status." };
   }
+  if (!isCanvasRole(canvasRoleValue)) return { saved: false, error: "Choose Viewer or Creator for Canvas." };
 
   try {
     await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
@@ -105,6 +108,7 @@ export async function updateMemberAccessAction(
         membershipId,
         role: roleValue,
         status: statusValue,
+        canvasRole: canvasRoleValue,
         orgNodeId,
       });
       await insertAuditLog(client, {
@@ -117,6 +121,7 @@ export async function updateMemberAccessAction(
           role: updated.role,
           status: updated.status,
           orgNodeId: updated.primaryScope?.orgNodeId ?? null,
+          canvasRole: updated.canvasRole,
         },
       });
     });

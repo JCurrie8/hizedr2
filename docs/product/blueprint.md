@@ -19,7 +19,7 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 3.4 |
+| Document status | Build-ready product definition — Version 3.5 |
 
 ### Changes since v1.0
 
@@ -93,7 +93,7 @@ This specification is designed to be handed to an AI software builder, technical
 
 ### Changes since v2.3
 
-- **Pulse and Canvas share one governed visual grammar.** A saved view contains layout, presentation and references to approved KPI definitions; it never stores or copies resolved customer data. Pulse uses Company Admin/Analyst-published tenant templates, while Canvas lets every entitled active member start privately and share a published board.
+- **Pulse and Canvas share one governed visual grammar.** A saved view contains layout, presentation and references to approved KPI definitions or a bounded organisation-scoped SQL analysis; it never embeds connector credentials or unrestricted source rows. Pulse uses Company Admin/Analyst-published tenant templates, while Canvas Creators can start privately and share a published board.
 - **A broad initial visual catalogue is explicit.** The first renderer covers KPI, line, area, column, horizontal bar, target-attainment, donut, gauge, funnel, heatmap, exact table, text, line-and-column, waterfall, treemap, radar, scatter and bullet visuals. Visual choice is constrained by semantic compatibility so catalogue breadth does not create misleading analysis.
 - **Sharing never transfers data authority.** Pulse templates and Canvas boards resolve under the current viewer's tenant, membership, role, organisation scope and approved KPI access on every render. Named-user, role, organisation-area and whole-tenant grants may control access to a board, but are additional to—not substitutes for—underlying data permissions.
 - **Geospatial views require governed geography.** Maps remain an MVP requirement, but are enabled only after the governed dimension model supplies validated geographic identifiers or coordinates. Hized must not infer locations from labels or plot arbitrary organisation positions merely to claim map support.
@@ -151,6 +151,11 @@ This specification is designed to be handed to an AI software builder, technical
 
 - **A successful SQL publication hands off explicitly into analytical governance.** After the approved read-only pipeline completes, Connect takes an authorised Company Admin or Analyst directly to governed dataset setup with that tenant-owned pipeline selected. The shortcut conveys no authority: Pulse entitlement, tenant membership, operator role and RLS are rechecked on the destination route and mutation.
 - **Publication into Hized is not automatic analytical exposure.** Imported rows remain inside Connect's operator boundary until a governor confirms the dataset identity, field roles and sensitive-data defaults. If the pipeline already has a governed dataset, the handoff opens that existing governance record instead of offering a duplicate.
+
+### Changes since v3.4
+
+- **Canvas creation is independent from the Analyst role.** Every active member can enter Canvas; a Company Admin separately grants Viewer or Creator capability without changing that person's business role or organisation scope. End users, Managers and Executives can therefore build their own boards, while Analysts retain responsibility for source/query preparation and metric governance.
+- **Saved SQL analysis is a governed visual source.** Company Admins and Analysts may author one bounded read-only SQL Server/Azure SQL `SELECT`/CTE against an approved source connection. Results must use Hized's semantic visual-row contract, resolve every row to a current tenant organisation node, and are stored relationally so RLS filters each viewer. Canvas can use a validated scoped analysis; a Pulse view can publish it only after every returned series is certified by a Company Admin into the versioned KPI catalogue.
 
 ## 1. Product definition and positioning
 
@@ -249,13 +254,14 @@ The organisational hierarchy is a first-class data structure. Dashboards must no
 | Functional Leader | Head of department or region | Manage performance, capacity and root causes within a defined scope | Department outcomes, teams, forecasts, risks |
 | Manager / Team Leader | Operational people manager | Run daily or weekly performance and coach teams | Backlog, productivity, quality, attendance, SLA |
 | End user (`employee` role) | Individual contributor | See approved personal or team goals, output, quality and trend within their assigned scope | Personal target attainment and quality measures |
-| Analyst | Client or Hized analyst | Explore governed data, build self-serve dashboards in Hized Canvas and validate metrics | Dataset usage, query performance, data quality |
+| Analyst | Client or Hized analyst | Prepare governed data/SQL analyses, support Canvas Creators and validate metrics | Dataset usage, query performance, data quality |
 
 ### 3.3 Access control model
 
 - Every active tenant member can enter Hized Pulse and Hized Canvas; neither product is reserved for administrators.
 - Company Admins configure invitations, membership status, feature role and organisation scope. Suspending a membership removes tenant access without deleting its audit history.
 - Role-based access controls define which features and actions a user can use. The initial tenant roles are Company Admin, Executive, Functional Leader, Manager, End user (`employee`) and Analyst.
+- Canvas Viewer/Creator is a separate product capability. It can be granted to any active tenant role; it never grants SQL authoring, connector access, KPI approval or broader organisation data.
 - Organisation scope independently defines which rows and hierarchy branches a user can see. A company-root assignment grants whole-company scope; a lower node limits the user to that node and its descendants.
 - Every non-admin member must have a primary scope. Company Admins are tenant-wide by definition and do not rely on a scope row for access.
 - Dashboard and module permissions define which subject areas are visible.
@@ -450,22 +456,23 @@ Where Pulse is the governed backbone — curated templates, approved KPIs, role-
 - Duplicate an existing board — personal or shared — as a starting point for a new view.
 - Add locally scoped calculated fields and filters for a single board, clearly distinguished from governed KPIs.
 - Promote a calculated field or board layout from Canvas into the governed KPI catalogue, subject to Company Admin review.
+- Company Admins and Analysts can prepare bounded saved SQL analyses for Creators. Canvas renders only the semantic, organisation-scoped result rows; source SQL and credentials remain hidden from ordinary Creators and viewers.
 
 ### 6.3 Requirements
 
 | ID | Requirement | Priority | Acceptance signal |
 |---|---|---|---|
-| CANVAS-001 | Authorised users can create personal boards composed of existing governed datasets and fields. | Must | A user can build and save a board without developer involvement. |
+| CANVAS-001 | Any active member granted Canvas Creator can create personal boards independently of their application role. | Must | An End user with Creator capability can build and save a board without receiving Analyst or wider data access; a Viewer cannot create or edit. |
 | CANVAS-002 | Users can add locally scoped calculated fields and filters that do not modify the governed KPI catalogue. | Should | Local calculations are visually labelled as personal/unverified and cannot silently override an approved KPI. |
 | CANVAS-003 | Boards can be shared with defined users, teams or the whole tenant, with view/edit permission separate from underlying dataset permissions. | Must | A shared board respects the viewer's own row-level and column-level security, not the creator's. |
 | CANVAS-004 | Users can duplicate an existing board as a starting point for a new one. | Should | Duplication preserves lineage back to the datasets and KPIs it draws from. |
-| CANVAS-005 | A Company Admin can promote a Canvas calculated field or board into the governed KPI catalogue / dashboard template set. | Should | A promoted field becomes a versioned, owned KPI definition, and boards built from it before promotion still reconcile. |
+| CANVAS-005 | A Company Admin can promote a Canvas calculation or saved SQL result series into the governed KPI catalogue / dashboard template set. | Should | A promoted series becomes a versioned, owned KPI definition with copied scoped values; later runs refresh that certified definition and uncertified series cannot publish in Pulse. |
 | CANVAS-006 | Canvas usage (boards created, shared, viewed, most-used datasets) is visible to administrators. | Could | An admin can see adoption and identify which self-serve boards are candidates for promotion into Pulse. |
 | CANVAS-007 | Allow authorised users to schedule a published Canvas board through the shared report-delivery service. | Must | Each recipient's render honours that recipient's current board, dataset, field, row and export permissions; inaccessible widgets are never rendered using the creator's access. |
 
 ### 6.4 Governance guardrail
 
-Canvas trades control for speed by design — that is its value. The non-negotiable constraint is that every board it produces is composed from the same governed, tenant-scoped datasets Pulse uses. Canvas can visualise and locally calculate; it must never let a user silently redefine or fork an approved KPI's meaning. The only way a Canvas calculation becomes an organisation-wide number is explicit promotion into the governed catalogue (CANVAS-005).
+Canvas trades control for speed by design — that is its value. The non-negotiable constraint is that every board uses governed KPI values or bounded SQL result rows resolved to tenant organisation nodes and filtered by RLS. Canvas can visualise and locally calculate; it must never let a user silently redefine or fork an approved KPI's meaning. The only way a Canvas calculation or SQL series becomes an organisation-wide Pulse number is explicit Company Admin certification into the governed catalogue (CANVAS-005).
 
 ## 7. Hized Platform Administration
 
@@ -541,6 +548,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 - Dimensional KPI values must reference published dimensions and active governed members explicitly linked to the KPI definition; unsliced totals and sliced values must never be mixed at the same visual grain.
 - Raw curated source JSON remains inside Connect's operator boundary. Record-level analytics uses a separate field-validated projection and inherits the linked KPI value's tenant, role and organisation permission.
 - Hized Canvas may compose new visual layouts and locally scoped calculated fields from governed datasets, but must never redefine an approved KPI definition without going through promotion (section 6.3, CANVAS-005).
+- Saved SQL visual rows must expose only the supported semantic aliases, resolve to a current tenant `org_node_id`/code, remain bounded in rows/time and be RLS-filterable before any board can use them. Certified series copy into `kpi_values`; Pulse never publishes a partially certified multi-series query.
 
 ### 8.3 Example KPI contract
 
@@ -645,7 +653,7 @@ Platform Super Admin's reach is the single most powerful access level in the sys
 | US-EMP-01 | As an employee, I want to view my approved targets and trend so that I understand my performance. | Should | The employee cannot access colleagues' restricted data. |
 | US-ADMIN-01 | As an administrator, I want to define a KPI once and reuse it across dashboards so that reports remain consistent. | Must | Definition, formula, thresholds, owner and version are stored centrally. |
 | US-DATA-01 | As a data owner, I want failed or stale pipelines to generate actionable alerts so that users do not unknowingly rely on outdated data. | Must | The dashboard displays freshness and pipeline incident status. |
-| US-CANVAS-01 | As an analyst, I want to build my own dashboard from governed datasets without waiting on engineering so that I can answer a one-off question quickly. | Should | The analyst can create, save and share a board using only approved datasets and fields, without altering any governed KPI. |
+| US-CANVAS-01 | As an End user with Canvas Creator access, I want to build my own dashboard from governed metrics or an Analyst-prepared SQL analysis so that I can answer a question without receiving data-engineering permissions. | Should | The Creator can create, save and share a board within their current data scope; source SQL remains Analyst/Admin-only and no board alters a governed KPI. |
 | US-REPORT-01 | As a manager, I want my weekly Pulse or Canvas pack delivered automatically so that the performance rhythm does not depend on somebody exporting it manually. | Must | The scheduled email arrives in the tenant time zone with the intended period/filters, and its content is rendered under the recipient's current access. |
 | US-DATA-02 | As an analyst, I want an ETL failure followed by a recovery notification so that I can act quickly without receiving duplicate noise from every retry. | Must | One deduplicated incident records delivery attempts, escalation and the healthy recovery event. |
 | US-PLATADMIN-01 | As a platform admin, I want to provision a new tenant and see its health alongside every other tenant so that I can run Hized's whole client base from one place. | Must | A new tenant is created via the platform admin UI, and immediately appears in the cross-tenant list with the same health indicators as existing tenants. |
@@ -804,7 +812,7 @@ This requirement is delivered progressively by the epic that owns each schema. E
 | EPIC-09 | Targets, commentary, actions and period snapshots. | Should | Performance review history is retained. |
 | EPIC-10 | Shared alerts, incident handling, scheduled Pulse/Canvas reports, exports and notification centre. | Must | Selected tenant members receive recipient-safe performance packs and deduplicated ETL incident/recovery messages; delivery attempts, suppression and exports are auditable. |
 | EPIC-11 | Audit, support tooling, monitoring, backup and pilot hardening. | Must | Operational runbook and recovery checks are complete. |
-| EPIC-12 | Hized Canvas self-serve board builder, local calculated fields and promotion-to-catalogue workflow. | Should | Analysts can build, save and share a board using only governed datasets; a promoted board's calculated field becomes a versioned KPI. |
+| EPIC-12 | Hized Canvas self-serve board builder, independent Creator capability, local/SQL analysis and promotion-to-catalogue workflow. | Should | A permitted End user can build, save and share a scoped board; Analysts can prepare bounded SQL sources; a Company Admin-certified result becomes a versioned KPI. |
 | EPIC-13 | Platform Administration: tenant provisioning, cross-tenant list, and platform-admin audit trail distinguishable from tenant-level audit. | Must | A platform admin creates a tenant end to end and every cross-tenant view/action is independently auditable (PLATFORM-001/002/003). |
 
 ### 13.3 Repository structure recommendation

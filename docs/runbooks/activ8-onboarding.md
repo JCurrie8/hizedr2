@@ -42,6 +42,18 @@ grant select, insert, update, delete, alter on schema::[hized_landing] to [hized
 
 The hosted publisher executes generated, bounded reads only: up to 100,000 rows and 250 fields per extract. It does not accept arbitrary SQL. Approved stage-five publication initially uses a complete snapshot so the stored Hized result exactly follows the promoted field contract; generic SQL source pipelines can still use a 24-hour-overlap watermark where separately configured. SQL destination delivery and read-only Hized publication each have independent manual/hourly-to-daily schedules and leases. The private-network gateway remains a delivery follow-on.
 
+### 2.4 SQL visual studio for the first Activ8 views
+
+The generated stage-five publisher above remains the repeatable dataset-ingestion path. The separate **Settings > SQL visual studio** is the faster visual-analysis path for building Activ8's first Canvas/Pulse questions against the same approved read-only SQL source:
+
+1. A Company Admin or Analyst selects the Activ8 read-only source connection and enters one `SELECT` or CTE. Hized refuses comments, multiple statements, write/dynamic/external execution verbs, runs for at most 30 seconds and accepts no more than 5,000 semantic result rows.
+2. The query returns `org_code` (or a Hized `org_node_id`), `series_key`, `series_label`, `period_start`, `period_end` and `actual_value`. Optional aliases are `category_label`, `target_value`, `prior_period_value`, `numerator_value`, `denominator_value` and `source_refreshed_at`.
+3. Every `org_code` must resolve unambiguously to Activ8's current Hized organisation hierarchy. Result rows are then stored relationally under tenant and organisation RLS; the saved SQL text remains visible only to Company Admins/Analysts.
+4. Any member granted the independent **Canvas Creator** capability can use an Analyst-prepared validated analysis in their own board without gaining SQL, Connect, KPI-governance or wider row access. Canvas Viewer/Creator is configured under **Settings > Users and access** and is independent from the member's application role.
+5. A Company Admin certifies each proven result series with its business definition, owner, unit, aggregation, direction and audience. Certification creates an approved versioned KPI and governed values; later successful runs refresh that KPI. Pulse publication is blocked until every series used by the saved query is certified.
+
+For the first Activ8 release, use SQL visual studio to iterate on the initial management questions quickly, then certify only agreed numbers. Do not include personal/sensitive source fields: the supported output contract is intentionally numeric and organisation-scoped, and is not a substitute for the governed record-projection workflow.
+
 ## 3. Direct Salesforce connection
 
 1. In Salesforce, create a dedicated API-only integration user and client-credentials application. Grant only the objects and fields required for the first agreed outcomes.

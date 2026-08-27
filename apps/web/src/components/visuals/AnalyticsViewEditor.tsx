@@ -15,6 +15,7 @@ import type {
   AnalyticsViewGrant,
   AnalyticsViewRuntime,
 } from "@/server/domains/analytics/visual-views";
+import type { SqlAnalysisOption } from "@/server/domains/analytics/sql-analysis";
 import { AnalyticsViewRenderer } from "./AnalyticsViewRenderer";
 import { AnalyticsSharingPanel } from "./AnalyticsSharingPanel";
 
@@ -45,12 +46,14 @@ export function AnalyticsViewEditor({
   surface,
   runtime,
   metrics,
+  queries,
   backHref,
   sharing,
 }: {
   surface: AnalyticsSurface;
   runtime: AnalyticsViewRuntime;
   metrics: AnalyticsMetricOption[];
+  queries: SqlAnalysisOption[];
   backHref: string;
   sharing?: { grants: AnalyticsViewGrant[]; options: AnalyticsSharingOptions } | null;
 }) {
@@ -121,7 +124,7 @@ export function AnalyticsViewEditor({
 
       <section className="rounded-xl border border-line bg-panel p-5">
         <h2 className="font-display text-xl font-semibold text-ink">Add a visual</h2>
-        <p className="mt-2 text-sm leading-6 text-muted">Choose the question first, then its display. Trend uses reporting periods; child comparison uses departments, teams or other visible areas beneath the current drill point.</p>
+        <p className="mt-2 text-sm leading-6 text-muted">Choose the question first, then its display. Use approved KPIs or one bounded, organisation-scoped SQL analysis. Trend uses reporting periods; child comparison uses departments, teams or other visible areas beneath the current drill point.</p>
         <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {VISUALS.map(([key, label, description]) => <div key={key} className="rounded-lg border border-line bg-canvas p-3"><p className="text-sm font-semibold text-ink">{label}</p><p className="mt-1 text-xs leading-5 text-muted">{description}</p></div>)}
         </div>
@@ -137,6 +140,17 @@ export function AnalyticsViewEditor({
           <fieldset className="rounded-lg border border-line p-4 md:col-span-2">
             <legend className="px-2 text-sm font-semibold text-ink">Governed KPIs</legend>
             {metrics.length > 0 ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{metrics.map((metric) => <label key={metric.id} className="flex items-start gap-2 text-sm text-ink"><input type="checkbox" name="metricIds" value={metric.id} className="mt-1" /><span><span className="font-semibold">{metric.name}</span><span className="mt-0.5 block text-xs leading-5 text-muted">{metric.definition}</span></span></label>)}</div> : <p className="text-sm text-muted">No approved KPIs are available yet. An Admin or Analyst can prepare them in the KPI catalogue.</p>}
+          </fieldset>
+          <fieldset className="rounded-lg border border-line p-4 md:col-span-2">
+            <legend className="px-2 text-sm font-semibold text-ink">Or saved SQL analysis</legend>
+            {queries.length > 0 ? <div className="grid gap-3 md:grid-cols-[1fr_10rem_8rem]">
+              <label className="text-sm text-ink">Analysis<select className={inputClass} name="queryId" defaultValue=""><option value="">Use governed KPIs above</option>{queries.map((query) => <option key={query.id} value={query.id}>{query.name} · {query.series.length} series · {query.status}</option>)}</select></label>
+              <label className="text-sm text-ink">Unit<select className={inputClass} name="queryUnit" defaultValue="number"><option value="number">Number</option><option value="percentage">Percentage</option><option value="currency">Currency</option><option value="duration">Duration</option><option value="score">Score</option></select></label>
+              <label className="text-sm text-ink">Decimals<input className={inputClass} type="number" name="queryDecimalPlaces" min={0} max={6} defaultValue={0}/></label>
+              <label className="text-sm text-ink">Currency code<input className={inputClass} name="queryCurrencyCode" maxLength={3} defaultValue="GBP"/></label>
+              <label className="text-sm text-ink">Favourable direction<select className={inputClass} name="queryFavourableDirection" defaultValue="higher"><option value="higher">Higher</option><option value="lower">Lower</option><option value="target">On target</option></select></label>
+              <p className="self-end pb-2 text-xs leading-5 text-muted">Choose either KPIs or SQL, never both.</p>
+            </div> : <><input type="hidden" name="queryUnit" value="number"/><input type="hidden" name="queryDecimalPlaces" value="0"/><input type="hidden" name="queryCurrencyCode" value="GBP"/><input type="hidden" name="queryFavourableDirection" value="higher"/><p className="text-sm text-muted">No validated SQL analyses are available. Company Admins and Analysts can create one in <Link href="/admin/queries" className="font-semibold text-teal-deep underline">SQL visual studio</Link>.</p></>}
           </fieldset>
           <label className="text-sm font-medium text-ink md:col-span-2">Text panel content <span className="font-normal text-muted">(only used for Text)</span><textarea className={inputClass} name="staticText" maxLength={3000} rows={3} /></label>
           <button type="submit" className="tenant-brand-primary w-fit rounded-md px-4 py-2 text-sm font-semibold">Add visual</button>

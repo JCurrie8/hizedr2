@@ -266,6 +266,95 @@ const verifiers = {
       claim_fixed_path: true,
     },
   },
+  "0040_sql_analysis_and_certified_metrics.sql": {
+    query: `
+      select
+        (select count(*)::integer from public._migrations where filename = $1) as ledger,
+        (select count(*)::integer from pg_class where oid in (
+          'public.sql_analysis_queries'::regclass,
+          'public.sql_analysis_rows'::regclass,
+          'public.analytics_widget_query_sources'::regclass,
+          'public.sql_analysis_certifications'::regclass
+        ) and relrowsecurity) as rls_tables,
+        (select count(*)::integer from pg_policies where schemaname = 'public'
+          and tablename in ('sql_analysis_queries', 'sql_analysis_rows',
+                            'analytics_widget_query_sources', 'sql_analysis_certifications')) as policies,
+        (select count(*)::integer from pg_indexes where schemaname = 'public'
+          and indexname in ('sql_analysis_queries_tenant_status_idx',
+                            'sql_analysis_queries_connector_idx',
+                            'sql_analysis_rows_query_period_idx',
+                            'sql_analysis_rows_scope_idx',
+                            'analytics_widget_query_sources_query_idx',
+                            'sql_analysis_certifications_query_idx',
+                            'sql_analysis_certifications_kpi_idx')) as indexes,
+        has_function_privilege('app_user', 'public.can_read_sql_analysis_row(uuid,uuid,uuid)', 'execute') as app_exec,
+        has_function_privilege('public', 'public.can_read_sql_analysis_row(uuid,uuid,uuid)', 'execute') as public_exec,
+        (select coalesce(proconfig, array[]::text[]) @> array['search_path=""'] from pg_proc
+          where oid = 'public.can_read_sql_analysis_row(uuid,uuid,uuid)'::regprocedure) as fixed_path
+    `,
+    expected: {
+      ledger: 1,
+      rls_tables: 4,
+      policies: 10,
+      indexes: 7,
+      app_exec: true,
+      public_exec: false,
+      fixed_path: true,
+    },
+  },
+  "0041_canvas_creator_capability.sql": {
+    query: `
+      select
+        (select count(*)::integer from public._migrations where filename = $1) as ledger,
+        (select count(*)::integer from information_schema.columns
+          where table_schema = 'public' and table_name = 'tenant_memberships'
+            and column_name = 'canvas_role' and is_nullable = 'NO') as canvas_column,
+        (select count(*)::integer from pg_indexes where schemaname = 'public'
+          and indexname = 'tenant_memberships_canvas_creator_idx') as creator_index,
+        has_function_privilege('app_user', 'public.can_create_canvas(uuid)', 'execute') as app_exec,
+        has_function_privilege('public', 'public.can_create_canvas(uuid)', 'execute') as public_exec,
+        (select coalesce(proconfig, array[]::text[]) @> array['search_path=""'] from pg_proc
+          where oid = 'public.can_create_canvas(uuid)'::regprocedure) as fixed_path,
+        (select count(*)::integer from pg_policies where schemaname = 'public'
+          and tablename = 'analytics_views' and policyname = 'analytics views: selected tenant inserts') as insert_policy
+    `,
+    expected: {
+      ledger: 1,
+      canvas_column: 1,
+      creator_index: 1,
+      app_exec: true,
+      public_exec: false,
+      fixed_path: true,
+      insert_policy: 1,
+    },
+  },
+  "0042_sql_analysis_collaboration_policy.sql": {
+    query: `
+      select
+        (select count(*)::integer from public._migrations where filename = $1) as ledger,
+        (select count(*)::integer from pg_policies where schemaname = 'public'
+          and tablename = 'sql_analysis_queries') as query_policies,
+        (select count(*)::integer from pg_policies where schemaname = 'public'
+          and tablename = 'sql_analysis_queries'
+          and policyname in ('SQL analyses: selected tenant governor reads',
+                             'SQL analyses: selected tenant governor inserts',
+                             'SQL analyses: selected tenant governor updates',
+                             'SQL analyses: selected tenant governor deletes')) as named_policies,
+        has_table_privilege('app_user', 'public.sql_analysis_queries', 'select') as app_select,
+        has_table_privilege('app_user', 'public.sql_analysis_queries', 'insert') as app_insert,
+        has_table_privilege('app_user', 'public.sql_analysis_queries', 'update') as app_update,
+        has_table_privilege('app_user', 'public.sql_analysis_queries', 'delete') as app_delete
+    `,
+    expected: {
+      ledger: 1,
+      query_policies: 4,
+      named_policies: 4,
+      app_select: true,
+      app_insert: true,
+      app_update: true,
+      app_delete: true,
+    },
+  },
 };
 
 const verifier = verifiers[expectedMigration];

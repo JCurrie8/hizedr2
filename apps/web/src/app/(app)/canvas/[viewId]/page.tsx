@@ -12,6 +12,7 @@ import {
   listAnalyticsViewGrants,
   loadAnalyticsViewRuntime,
 } from "@/server/domains/analytics/visual-views";
+import { listSqlAnalysisOptions } from "@/server/domains/analytics/sql-analysis";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 
 export default async function CanvasBoardPage({
@@ -33,8 +34,11 @@ export default async function CanvasBoardPage({
         viewId,
         requestedOrgNodeId: org,
       });
-      if (!runtime) return { runtime: null, metrics: [], sharing: null };
+      if (!runtime) return { runtime: null, metrics: [], queries: [], sharing: null };
       const metrics = await listAnalyticsMetricOptions(client, { tenantId: ctx.tenant.id });
+      const queries = ctx.role === "company_admin" || ctx.role === "analyst"
+        ? await listSqlAnalysisOptions(client, { tenantId: ctx.tenant.id })
+        : [];
       const sharing = runtime.view.isOwner ? {
         grants: await listAnalyticsViewGrants(client, {
           tenantId: ctx.tenant.id,
@@ -46,7 +50,7 @@ export default async function CanvasBoardPage({
           actorUserId: ctx.profileId,
         }),
       } : null;
-      return { runtime, metrics, sharing };
+      return { runtime, metrics, queries, sharing };
     }),
   ]);
   if (!result.runtime || result.runtime.view.surface !== "canvas") notFound();
@@ -61,6 +65,7 @@ export default async function CanvasBoardPage({
           surface="canvas"
           runtime={result.runtime}
           metrics={result.metrics}
+          queries={result.queries}
           backHref={href("/canvas")}
           sharing={result.sharing}
         />
