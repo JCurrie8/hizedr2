@@ -22,7 +22,7 @@ export function MemberAccessForm({ member, orgScopes }: { member: MembershipAcce
   const [role, setRole] = useState<AppRole>(member.role);
 
   return (
-    <form action={formAction} className="grid gap-3 px-4 py-4 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1.5fr)_1fr_1.5fr_0.8fr_auto] lg:items-end">
+    <form action={formAction} className="grid gap-3 px-4 py-4 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1.5fr)_1fr_1fr_1.5fr_0.8fr_auto] lg:items-end">
       <input type="hidden" name="membershipId" value={member.membershipId} />
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-text">{member.fullName ?? "Name not provided"}</p>
@@ -40,6 +40,14 @@ export function MemberAccessForm({ member, orgScopes }: { member: MembershipAcce
           {ROLES.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-xs text-muted">
+        Canvas
+        <select name="canvasRole" defaultValue={member.canvasRole} className="rounded border border-line px-2 py-2 text-sm">
+          <option value="creator">Creator</option>
+          <option value="viewer">Viewer only</option>
         </select>
       </label>
 
@@ -74,7 +82,7 @@ export function MemberAccessForm({ member, orgScopes }: { member: MembershipAcce
       </button>
 
       {(state.error || state.saved) && (
-        <p className={`text-xs sm:col-span-2 lg:col-span-5 ${state.error ? "text-danger" : "text-teal-deep"}`}>
+        <p className={`text-xs sm:col-span-2 lg:col-span-6 ${state.error ? "text-danger" : "text-teal-deep"}`}>
           {state.error ?? "Access saved."}
         </p>
       )}

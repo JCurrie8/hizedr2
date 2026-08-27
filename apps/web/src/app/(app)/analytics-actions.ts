@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { insertAuditLog } from "@/server/domains/access-control/audit";
+import { canCreateCanvas } from "@/server/domains/access-control/membership-access";
 import { assertProductAccess } from "@/server/domains/products/entitlements";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 import {
@@ -61,7 +62,12 @@ async function requireAnalyticsAccess(surface: AnalyticsSurface, editing: boolea
   }
   await withUserContext(
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
-    (client) => assertProductAccess(client, { tenantId: ctx.tenant.id, productKey: surface }),
+    async (client) => {
+      await assertProductAccess(client, { tenantId: ctx.tenant.id, productKey: surface });
+      if (surface === "canvas" && editing && !(await canCreateCanvas(client, ctx.tenant.id))) {
+        throw new Error("Your Canvas access is Viewer only. Ask a Company Admin for Creator access.");
+      }
+    },
   );
   return ctx;
 }
@@ -207,15 +213,25 @@ export async function addAnalyticsWidgetAction(formData: FormData): Promise<void
   const height = enumValue(formData, "height", ANALYTICS_HEIGHTS, "visual height");
   const staticText = textValue(formData, "staticText", "Text content", 3000, false);
   const metricIds = [...new Set(formData.getAll("metricIds").map(String))];
+  const queryIdValue = String(formData.get("queryId") ?? "");
+  const queryId = queryIdValue ? queryIdValue : null;
+  if (queryId && !UUID_PATTERN.test(queryId)) throw new Error("Choose a valid SQL analysis.");
   if (metricIds.some((id) => !UUID_PATTERN.test(id))) throw new Error("Choose valid governed KPIs.");
   if (visualType === "text" && !staticText) throw new Error("Text panels need content.");
-  if (visualType !== "text" && metricIds.length === 0) throw new Error("Choose at least one governed KPI.");
-  if (["kpi", "gauge", "heatmap", "bullet"].includes(visualType) && metricIds.length !== 1) throw new Error(`${visualType === "kpi" ? "KPI cards" : visualType === "gauge" ? "Gauges" : visualType === "heatmap" ? "Heatmaps" : "Bullet charts"} use one KPI.`);
-  if (visualType === "funnel" && metricIds.length < 2) throw new Error("Funnels need at least two governed KPIs.");
-  if (["combo", "scatter"].includes(visualType) && metricIds.length !== 2) throw new Error(`${visualType === "combo" ? "Line + column charts" : "Scatter plots"} use exactly two governed KPIs.`);
-  if (visualType === "radar" && metricIds.length < 3) throw new Error("Radar charts need at least three governed KPIs.");
-  if (visualType === "waterfall" && metricIds.length < 2) throw new Error("Waterfalls need at least two contributions.");
+  if (visualType !== "text" && metricIds.length === 0 && !queryId) throw new Error("Choose governed KPIs or one saved SQL analysis.");
+  if (queryId && metricIds.length > 0) throw new Error("Choose either governed KPIs or a SQL analysis, not both.");
+  if (!queryId && ["kpi", "gauge", "heatmap", "bullet"].includes(visualType) && metricIds.length !== 1) throw new Error(`${visualType === "kpi" ? "KPI cards" : visualType === "gauge" ? "Gauges" : visualType === "heatmap" ? "Heatmaps" : "Bullet charts"} use one KPI.`);
+  if (!queryId && visualType === "funnel" && metricIds.length < 2) throw new Error("Funnels need at least two governed KPIs.");
+  if (!queryId && ["combo", "scatter"].includes(visualType) && metricIds.length !== 2) throw new Error(`${visualType === "combo" ? "Line + column charts" : "Scatter plots"} use exactly two governed KPIs.`);
+  if (!queryId && visualType === "radar" && metricIds.length < 3) throw new Error("Radar charts need at least three governed KPIs.");
+  if (!queryId && visualType === "waterfall" && metricIds.length < 2) throw new Error("Waterfalls need at least two contributions.");
   if (visualType === "heatmap" && sourceMode !== "children") throw new Error("Heatmaps compare child teams or departments.");
+  const queryUnit = enumValue(formData, "queryUnit", ["number", "percentage", "currency", "duration", "score"] as const, "SQL result unit");
+  const queryFavourableDirection = enumValue(formData, "queryFavourableDirection", ["higher", "lower", "target"] as const, "SQL result direction");
+  const queryDecimalPlaces = Number(formData.get("queryDecimalPlaces") ?? 0);
+  if (!Number.isInteger(queryDecimalPlaces) || queryDecimalPlaces < 0 || queryDecimalPlaces > 6) throw new Error("SQL result decimal places must be between 0 and 6.");
+  const queryCurrencyCode = queryUnit === "currency" ? String(formData.get("queryCurrencyCode") ?? "").trim().toUpperCase() : null;
+  if (queryCurrencyCode && !/^[A-Z]{3}$/.test(queryCurrencyCode)) throw new Error("SQL result currency code must be three letters.");
 
   await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
     const widget = await addAnalyticsWidget(client, {
@@ -229,6 +245,11 @@ export async function addAnalyticsWidgetAction(formData: FormData): Promise<void
       height,
       staticText,
       metricIds,
+      queryId,
+      queryUnit,
+      queryCurrencyCode,
+      queryDecimalPlaces,
+      queryFavourableDirection,
       actorUserId: ctx.profileId,
     });
     await insertAuditLog(client, {
@@ -237,7 +258,7 @@ export async function addAnalyticsWidgetAction(formData: FormData): Promise<void
       action: `${surface}.visual_added`,
       targetType: "analytics_widget",
       targetId: widget.id,
-      metadata: { viewId, visualType, metricCount: metricIds.length },
+      metadata: { viewId, visualType, metricCount: metricIds.length, queryId },
     });
   });
   revalidateView(surface, viewId);

@@ -87,6 +87,26 @@ describe("analytics view RLS", () => {
     ))).rejects.toThrow(/row-level security/);
   });
 
+  it("keeps Canvas Creator independent from the employee application role", async () => {
+    await admin.query(
+      "update public.tenant_memberships set canvas_role = 'viewer' where tenant_id = $1 and user_id = $2",
+      [tenantA.tenantId, colleague.profileId],
+    );
+    await expect(withUserContext({ userId: colleague.profileId, tenantId: tenantA.tenantId }, (client) => client.query(
+      `insert into public.analytics_views (tenant_id, surface, name, owner_user_id, created_by, updated_by)
+       values ($1, 'canvas', 'Blocked viewer board', $2, $2, $2)`,
+      [tenantA.tenantId, colleague.profileId],
+    ))).rejects.toThrow(/row-level security/);
+    await expect(withUserContext({ userId: colleague.profileId, tenantId: tenantA.tenantId }, (client) => client.query(
+      "update public.analytics_views set description = 'viewer edit' where tenant_id = $1 and id = $2",
+      [tenantA.tenantId, colleagueViewId],
+    ).then((result) => result.rowCount))).resolves.toBe(0);
+    await admin.query(
+      "update public.tenant_memberships set canvas_role = 'creator' where tenant_id = $1 and user_id = $2",
+      [tenantA.tenantId, colleague.profileId],
+    );
+  });
+
   it("keeps record projection rules inside the selected tenant and away from ordinary members", async () => {
     const datasetId = await withUserContext({ userId: tenantA.profileId, tenantId: tenantA.tenantId }, async (client) => {
       const { rows: [dataset] } = await client.query(

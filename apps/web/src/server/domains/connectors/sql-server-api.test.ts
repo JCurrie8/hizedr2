@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPublicSqlAddress, normalizeSqlServerHost, quoteSqlServerIdentifier } from "./sql-server-api";
+import { isPublicSqlAddress, normalizeSqlServerHost, quoteSqlServerIdentifier, validateSqlAnalysisText } from "./sql-server-api";
 import { normalizeDestinationColumnName } from "./sql-server-destination-api";
 
 describe("SQL Server adapter input hardening", () => {
@@ -34,5 +34,17 @@ describe("SQL Server adapter input hardening", () => {
     expect(normalizeDestinationColumnName("2026 value (£)", used)).toBe("field_2026_value");
     expect(normalizeDestinationColumnName("Account-Name", used)).toMatch(/^Account_Name_[0-9a-f]{10}$/);
     expect(new Set([...used]).size).toBe(3);
+  });
+
+  it("accepts one bounded read query and refuses write or dynamic SQL forms", () => {
+    expect(validateSqlAnalysisText("with totals as (select 1 as n) select n from totals;"))
+      .toBe("with totals as (select 1 as n) select n from totals");
+    expect(validateSqlAnalysisText("select 'drop table safe' as series_label"))
+      .toBe("select 'drop table safe' as series_label");
+    expect(() => validateSqlAnalysisText("select * into #copy from dbo.jobs")).toThrow(/SELECT INTO/);
+    expect(() => validateSqlAnalysisText("select * from dbo.jobs; delete from dbo.jobs")).toThrow(/one statement/);
+    expect(() => validateSqlAnalysisText("exec dbo.report_jobs")).toThrow(/SELECT or CTE/);
+    expect(() => validateSqlAnalysisText("select * from openrowset('SQLNCLI', 'x', 'select 1')"))
+      .toThrow(/OPENROWSET/);
   });
 });

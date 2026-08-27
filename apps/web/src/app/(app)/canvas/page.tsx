@@ -9,6 +9,7 @@ import {
 import { getAuthContextFromRequest } from "@/server/domains/access-control/auth-context";
 import { listAnalyticsViews } from "@/server/domains/analytics/visual-views";
 import { hasProductAccess } from "@/server/domains/products/entitlements";
+import { canCreateCanvas } from "@/server/domains/access-control/membership-access";
 import { tenantAppUrl } from "@/server/domains/tenancy/tenant-landing";
 
 export default async function CanvasPage() {
@@ -18,6 +19,7 @@ export default async function CanvasPage() {
     headers(),
     withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => ({
       allowed: await hasProductAccess(client, { tenantId: ctx.tenant.id, productKey: "canvas" }),
+      canCreate: await canCreateCanvas(client, ctx.tenant.id),
       views: await listAnalyticsViews(client, { tenantId: ctx.tenant.id, surface: "canvas" }),
     })),
   ]);
@@ -69,8 +71,8 @@ export default async function CanvasPage() {
 
         <section className="h-fit rounded-xl border border-line bg-panel p-5">
           <h2 className="font-display text-xl font-semibold text-ink">New board</h2>
-          <p className="mt-2 text-sm leading-6 text-muted">Every active user can start privately and choose whether to share later.</p>
-          <form action={createAnalyticsViewAction} className="mt-4 space-y-4">
+          <p className="mt-2 text-sm leading-6 text-muted">Canvas Creator is independent from your organisation role. Creators can start privately and choose whether to share later.</p>
+          {result.canCreate ? <form action={createAnalyticsViewAction} className="mt-4 space-y-4">
             <input type="hidden" name="surface" value="canvas" />
             <label className="block text-sm font-medium text-ink">
               Name
@@ -81,7 +83,7 @@ export default async function CanvasPage() {
               <textarea name="description" maxLength={500} rows={3} className="mt-1 w-full rounded-md border border-line px-3 py-2" placeholder="The decision this board supports" />
             </label>
             <button className="tenant-brand-primary rounded-md px-4 py-2 text-sm font-semibold">Create board</button>
-          </form>
+          </form> : <p className="mt-4 rounded-lg border border-dashed border-line bg-canvas p-4 text-sm leading-6 text-muted">Your Canvas access is <strong className="text-ink">Viewer only</strong>. You can open shared boards, while a Company Admin can grant Creator access without changing your data role or organisation scope.</p>}
         </section>
       </div>
     </div>

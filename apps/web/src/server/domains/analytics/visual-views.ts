@@ -86,6 +86,7 @@ export interface AnalyticsWidgetDefinition {
   configuration: Record<string, unknown>;
   staticText: string;
   metrics: AnalyticsMetricReference[];
+  queryId: string | null;
 }
 
 export interface AnalyticsViewSummary {
@@ -262,6 +263,7 @@ function parseWidget(value: unknown): AnalyticsWidgetDefinition {
     configuration: (widget.configuration ?? {}) as Record<string, unknown>,
     staticText: String(widget.staticText ?? ""),
     metrics: ((widget.metrics ?? []) as unknown[]).map(parseMetric),
+    queryId: widget.queryId ? String(widget.queryId) : null,
   };
 }
 
@@ -291,6 +293,28 @@ export async function getAnalyticsView(
           and definition.tenant_id = metric.tenant_id
         where metric.tenant_id = $1
         group by metric.tenant_id, metric.widget_id
+     ), query_series as (
+       select distinct source.tenant_id, source.widget_id, source.query_id,
+              source.unit, source.currency_code, source.decimal_places,
+              source.favourable_direction, result.series_key, result.series_label
+         from public.analytics_widget_query_sources source
+         join public.sql_analysis_rows result
+           on result.tenant_id = source.tenant_id and result.query_id = source.query_id
+     ), query_metric_groups as (
+       select series.tenant_id, series.widget_id, series.query_id,
+              jsonb_agg(jsonb_build_object(
+                'id', 'query:' || series.query_id::text || ':' || series.series_key,
+                'key', series.series_key,
+                'name', series.series_label,
+                'unit', series.unit,
+                'currencyCode', series.currency_code,
+                'decimalPlaces', series.decimal_places,
+                'favourableDirection', series.favourable_direction,
+                'thresholds', '{}'::jsonb,
+                'label', series.series_label
+              ) order by series.series_label, series.series_key) as metrics
+         from query_series series
+        group by series.tenant_id, series.widget_id, series.query_id
      ), widget_groups as (
        select widget.tenant_id, widget.view_id,
               jsonb_agg(
@@ -305,12 +329,15 @@ export async function getAnalyticsView(
                   'height', widget.height,
                   'configuration', widget.configuration,
                   'staticText', widget.static_text,
-                  'metrics', coalesce(metric_groups.metrics, '[]'::jsonb)
+                  'metrics', coalesce(metric_groups.metrics, query_metric_groups.metrics, '[]'::jsonb),
+                  'queryId', query_metric_groups.query_id
                 ) order by widget.position, widget.id
               ) as widgets
          from public.analytics_widgets widget
          left join metric_groups
            on metric_groups.tenant_id = widget.tenant_id and metric_groups.widget_id = widget.id
+         left join query_metric_groups
+           on query_metric_groups.tenant_id = widget.tenant_id and query_metric_groups.widget_id = widget.id
         where widget.tenant_id = $1
         group by widget.tenant_id, widget.view_id
      )
@@ -611,8 +638,12 @@ export async function duplicateAnalyticsView(
   // only text panels and visuals that still have at least one permitted KPI;
   // never smuggle an inaccessible definition into the new private board or
   // create an invalid empty-metric visual.
+  const { rows: [authority] } = await client.query<{ can_use_sql: boolean }>(
+    `select public.is_kpi_governor($1) or public.is_platform_admin() as can_use_sql`,
+    [input.tenantId],
+  );
   const permittedWidgets = source.widgets.filter(
-    (widget) => widget.visualType === "text" || widget.metrics.length > 0,
+    (widget) => widget.visualType === "text" || (widget.queryId ? authority?.can_use_sql : widget.metrics.length > 0),
   );
   for (const widget of permittedWidgets) {
     const { rows: [copiedWidget] } = await client.query<{ id: string }>(
@@ -637,7 +668,7 @@ export async function duplicateAnalyticsView(
       ],
     );
     if (!copiedWidget) throw new Error("A visual could not be duplicated.");
-    if (widget.metrics.length > 0) {
+    if (widget.metrics.length > 0 && !widget.queryId) {
       await client.query(
         `insert into public.analytics_widget_metrics
            (tenant_id, widget_id, kpi_definition_id, position, series_label)
@@ -656,6 +687,18 @@ export async function duplicateAnalyticsView(
             series_label: metric.label === metric.name ? "" : metric.label,
           }))),
         ],
+      );
+    }
+    if (widget.queryId) {
+      await client.query(
+        `insert into public.analytics_widget_query_sources
+           (tenant_id, widget_id, query_id, unit, currency_code, decimal_places,
+            favourable_direction, created_by)
+         select source.tenant_id, $3, source.query_id, source.unit, source.currency_code,
+                source.decimal_places, source.favourable_direction, $4
+           from public.analytics_widget_query_sources source
+          where source.tenant_id = $1 and source.widget_id = $2`,
+        [input.tenantId, widget.id, copiedWidget.id, input.actorUserId],
       );
     }
   }
@@ -733,10 +776,20 @@ export async function publishAnalyticsView(
                     and metric.widget_id = widget.id
                     and definition.approval_status = 'approved'
                 )
+                and not exists (
+                  select 1
+                    from public.analytics_widget_query_sources source
+                    join public.sql_analysis_queries query_row
+                      on query_row.id = source.query_id and query_row.tenant_id = source.tenant_id
+                   where source.tenant_id = widget.tenant_id
+                     and source.widget_id = widget.id
+                     and query_row.status in ('validated', 'certified')
+                     and ($3::text = 'canvas' or query_row.status = 'certified')
+                )
             )::integer as invalid_widget_count
        from public.analytics_widgets widget
       where widget.tenant_id = $1 and widget.view_id = $2`,
-    [input.tenantId, input.viewId],
+    [input.tenantId, input.viewId, view.surface],
   );
   if (!validation?.widget_count) throw new Error("Add at least one visual before publishing.");
   if (validation.invalid_widget_count > 0) throw new Error("Every non-text visual needs at least one approved KPI.");
@@ -774,10 +827,15 @@ export async function addAnalyticsWidget(
     height: AnalyticsWidgetHeight;
     staticText: string;
     metricIds: string[];
+    queryId?: string | null;
+    queryUnit?: KpiUnit;
+    queryCurrencyCode?: string | null;
+    queryDecimalPlaces?: number;
+    queryFavourableDirection?: KpiDirection;
     actorUserId: string;
   },
 ): Promise<{ id: string }> {
-  if (input.visualType !== "text") {
+  if (input.visualType !== "text" && input.queryId === null) {
     const { rows: definitions } = await client.query<{ id: string; unit: KpiUnit }>(
       `select id, unit from public.kpi_definitions
         where tenant_id = $1 and id = any($2::uuid[])
@@ -789,6 +847,23 @@ export async function addAnalyticsWidget(
     if (comparableVisuals.includes(input.visualType) && new Set(definitions.map((definition) => definition.unit)).size > 1) {
       throw new Error("This visual requires KPIs with compatible units.");
     }
+  }
+  if (input.queryId) {
+    const { rows: [query] } = await client.query<{ status: string; series_count: number }>(
+      `select query_row.status, count(distinct result.series_key)::integer as series_count
+         from public.sql_analysis_queries query_row
+         join public.sql_analysis_rows result
+           on result.query_id = query_row.id and result.tenant_id = query_row.tenant_id
+        where query_row.tenant_id = $1 and query_row.id = $2
+          and query_row.status in ('validated', 'certified')
+        group by query_row.id`,
+      [input.tenantId, input.queryId],
+    );
+    if (!query || query.series_count < 1) throw new Error("Run and validate the SQL analysis before using it in a visual.");
+    if (["kpi", "gauge", "heatmap", "bullet"].includes(input.visualType) && query.series_count !== 1) throw new Error("This visual requires a SQL analysis with exactly one series.");
+    if (["combo", "scatter"].includes(input.visualType) && query.series_count !== 2) throw new Error("This visual requires a SQL analysis with exactly two series.");
+    if (input.visualType === "funnel" && query.series_count < 2) throw new Error("Funnels require at least two SQL series.");
+    if (input.visualType === "radar" && query.series_count < 3) throw new Error("Radar charts require at least three SQL series.");
   }
   const { rows: [created] } = await client.query<{ id: string }>(
     `insert into public.analytics_widgets
@@ -821,6 +896,16 @@ export async function addAnalyticsWidget(
        select $1, $2, metric_id, ordinal - 1
        from unnest($3::uuid[]) with ordinality as selected(metric_id, ordinal)`,
       [input.tenantId, created.id, input.metricIds],
+    );
+  }
+  if (input.visualType !== "text" && input.queryId) {
+    await client.query(
+      `insert into public.analytics_widget_query_sources
+         (tenant_id, widget_id, query_id, unit, currency_code, decimal_places,
+          favourable_direction, created_by)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [input.tenantId, created.id, input.queryId, input.queryUnit ?? "number", input.queryCurrencyCode ?? null,
+        input.queryDecimalPlaces ?? 0, input.queryFavourableDirection ?? "higher", input.actorUserId],
     );
   }
   return created;
@@ -923,12 +1008,14 @@ export async function loadAnalyticsViewRuntime(
     tenantId: input.tenantId,
     requestedOrgNodeId: input.requestedOrgNodeId,
   });
-  const metricIds = [...new Set(view.widgets.flatMap((widget) => widget.metrics.map((metric) => metric.id)))];
+  const metricIds = [...new Set(view.widgets.flatMap((widget) => widget.metrics.map((metric) => metric.id)))]
+    .filter((id) => /^[0-9a-f-]{36}$/i.test(id));
+  const queryIds = [...new Set(view.widgets.flatMap((widget) => widget.queryId ? [widget.queryId] : []))];
   const organisationIds = hierarchy
     ? [hierarchy.selected.id, ...hierarchy.children.map((child) => child.id)]
     : [];
   const reportingPeriods = input.reportingPeriods ?? 12;
-  if (metricIds.length === 0 || organisationIds.length === 0) {
+  if ((metricIds.length === 0 && queryIds.length === 0) || organisationIds.length === 0) {
     return {
       view,
       hierarchy,
@@ -942,7 +1029,7 @@ export async function loadAnalyticsViewRuntime(
     };
   }
 
-  const { rows: dimensionRows } = await client.query(
+  const { rows: dimensionRows } = metricIds.length === 0 ? { rows: [] } : await client.query(
     `select distinct dimension.dimension_key, dimension.name, dimension.semantic_type,
             member.member_key, member.label, member.sort_order
        from public.kpi_definition_dimensions link
@@ -989,7 +1076,7 @@ export async function loadAnalyticsViewRuntime(
   const activeDimensionKey = requestedDimension && requestedMember ? requestedDimension.key : null;
   const activeMemberKey = requestedDimension && requestedMember ? requestedMember.key : null;
 
-  const { rows } = await client.query(
+  const { rows } = metricIds.length === 0 ? { rows: [] } : await client.query(
     `with ranked as (
        select value.id as value_id, value.kpi_definition_id, definition.name as metric_name,
               value.org_node_id, version.name as organisation_name,
@@ -1062,11 +1149,22 @@ export async function loadAnalyticsViewRuntime(
      order by metric_name, organisation_name, period_end`,
     [input.tenantId, metricIds, organisationIds, reportingPeriods, activeDimensionKey, activeMemberKey],
   );
+  const { rows: queryRows } = queryIds.length === 0 ? { rows: [] } : await client.query(
+    `select result.id as value_id, result.query_id, result.series_key, result.series_label,
+            result.org_node_id, result.category_label, result.period_start::text,
+            result.period_end::text, result.actual_value, result.target_value,
+            result.prior_period_value, extract(epoch from result.source_refreshed_at) as source_refreshed_epoch
+       from public.sql_analysis_rows result
+      where result.tenant_id = $1 and result.query_id = any($2::uuid[])
+        and result.org_node_id = any($3::uuid[])
+      order by result.series_label, result.category_label, result.period_end`,
+    [input.tenantId, queryIds, organisationIds],
+  );
   return {
     view,
     hierarchy,
     filterContext: { reportingPeriods, dimensions, activeDimensionKey, activeMemberKey },
-    values: rows.map((row) => ({
+    values: [...rows.map((row) => ({
       valueId: row.value_id,
       metricId: row.kpi_definition_id,
       metricName: row.metric_name,
@@ -1080,6 +1178,20 @@ export async function loadAnalyticsViewRuntime(
       sourceRefreshedAt: new Date(Number(row.source_refreshed_epoch) * 1_000).toISOString(),
       expectedLatencySeconds: Number(row.expected_latency_seconds),
       hasRecordLineage: Boolean(row.has_record_lineage),
-    })),
+    })), ...queryRows.map((row) => ({
+      valueId: row.value_id,
+      metricId: `query:${row.query_id}:${row.series_key}`,
+      metricName: row.series_label,
+      organisationId: row.org_node_id,
+      organisationName: row.category_label,
+      periodStart: String(row.period_start),
+      periodEnd: String(row.period_end),
+      actualValue: Number(row.actual_value),
+      targetValue: row.target_value === null ? null : Number(row.target_value),
+      priorPeriodValue: row.prior_period_value === null ? null : Number(row.prior_period_value),
+      sourceRefreshedAt: new Date(Number(row.source_refreshed_epoch) * 1_000).toISOString(),
+      expectedLatencySeconds: 86_400,
+      hasRecordLineage: false,
+    }))],
   };
 }

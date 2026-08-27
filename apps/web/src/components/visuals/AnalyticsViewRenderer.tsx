@@ -504,7 +504,7 @@ export function AnalyticsViewRenderer({
                 <h2 className="font-display text-lg font-semibold text-ink">{widget.title}</h2>
                 {widget.subtitle && <p className="mt-1 text-xs leading-5 text-muted">{widget.subtitle}</p>}
               </div>
-              <span className="shrink-0 rounded-full bg-canvas px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">{widget.visualType.replaceAll("_", " ")}</span>
+              <span className="shrink-0 rounded-full bg-canvas px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">{widget.queryId ? "SQL · " : ""}{widget.visualType.replaceAll("_", " ")}</span>
             </div>
             <AnalyticsVisual widget={widget} rows={rows} />
             {widget.visualType !== "text" && <InspectDataTable widget={widget} rows={rows} recordDrillHref={recordDrillHref} />}

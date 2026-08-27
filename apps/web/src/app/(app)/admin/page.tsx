@@ -12,6 +12,13 @@ const settings = [
     allowedRoles: ["company_admin", "analyst"],
   },
   {
+    title: "SQL visual studio",
+    description: "Build bounded SQL analyses for Canvas and Pulse, then certify returned series as governed metrics.",
+    path: "/admin/queries",
+    adminOnly: false,
+    allowedRoles: ["company_admin", "analyst"],
+  },
+  {
     title: "Governed datasets",
     description: "Publish Connect output, govern field sensitivity and record drill-through.",
     path: "/admin/datasets",
