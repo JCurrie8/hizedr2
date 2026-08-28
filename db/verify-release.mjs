@@ -355,7 +355,107 @@ const verifiers = {
       app_delete: true,
     },
   },
+  "0043_outbound_sql_gateway.sql": {
+    query: `
+      select
+        (select count(*)::integer from public._migrations where filename = $1) as ledger,
+        (select count(*)::integer from pg_class where oid in (
+          'public.connector_gateways'::regclass,
+          'public.connector_gateway_jobs'::regclass
+        ) and relrowsecurity) as rls_tables,
+        (select count(*)::integer from pg_policies where schemaname = 'public'
+          and tablename in ('connector_gateways', 'connector_gateway_jobs')) as policies,
+        (select count(*)::integer from pg_indexes where schemaname = 'public'
+          and indexname in (
+            'connector_gateways_active_name_idx',
+            'connector_gateways_tenant_status_idx',
+            'connector_gateways_device_idx',
+            'connector_gateway_jobs_one_active_query_idx',
+            'connector_gateway_jobs_claim_idx',
+            'connector_gateway_jobs_tenant_query_idx'
+          )) as indexes,
+        has_table_privilege('app_user', 'public.connector_gateways', 'select') as gateway_table_select,
+        has_column_privilege('app_user', 'public.connector_gateways', 'id', 'select') as gateway_safe_select,
+        has_column_privilege('app_user', 'public.connector_gateways', 'enrollment_token_hash', 'select') as enrollment_hash_select,
+        has_column_privilege('app_user', 'public.connector_gateways', 'device_token_hash', 'select') as device_hash_select,
+        has_table_privilege('app_user', 'public.connector_gateways', 'insert') as gateway_insert,
+        has_table_privilege('app_user', 'public.connector_gateways', 'update') as gateway_update,
+        has_table_privilege('app_user', 'public.connector_gateway_jobs', 'select') as job_table_select,
+        has_column_privilege('app_user', 'public.connector_gateway_jobs', 'id', 'select') as job_safe_select,
+        has_column_privilege('app_user', 'public.connector_gateway_jobs', 'lease_token_hash', 'select') as lease_hash_select,
+        has_table_privilege('app_user', 'public.connector_gateway_jobs', 'insert') as job_insert,
+        has_table_privilege('app_user', 'public.connector_gateway_jobs', 'update') as job_update,
+        (select count(*)::integer from pg_proc where oid in (
+          'public.create_connector_gateway_enrollment(uuid,text,text,text,timestamptz,uuid)'::regprocedure,
+          'public.begin_connector_gateway_enrollment(text)'::regprocedure,
+          'public.complete_connector_gateway_enrollment(uuid,text,text,uuid,uuid,text,text,text,integer,jsonb)'::regprocedure,
+          'public.fail_connector_gateway_enrollment(uuid,text,text)'::regprocedure,
+          'public.revoke_connector_gateway(uuid,uuid,uuid)'::regprocedure,
+          'public.enqueue_connector_gateway_sql_analysis(uuid,uuid,uuid)'::regprocedure,
+          'public.claim_connector_gateway_job(text,text)'::regprocedure,
+          'public.authenticate_connector_gateway_device(text)'::regprocedure,
+          'public.authenticate_connector_gateway_job_result(text,uuid,text)'::regprocedure,
+          'public.finish_connector_gateway_job(uuid,uuid,text,text,text,integer,text,uuid)'::regprocedure
+        ) and has_function_privilege('app_user', oid, 'execute')) as app_exec,
+        (select count(*)::integer from pg_proc where oid in (
+          'public.create_connector_gateway_enrollment(uuid,text,text,text,timestamptz,uuid)'::regprocedure,
+          'public.begin_connector_gateway_enrollment(text)'::regprocedure,
+          'public.complete_connector_gateway_enrollment(uuid,text,text,uuid,uuid,text,text,text,integer,jsonb)'::regprocedure,
+          'public.fail_connector_gateway_enrollment(uuid,text,text)'::regprocedure,
+          'public.revoke_connector_gateway(uuid,uuid,uuid)'::regprocedure,
+          'public.enqueue_connector_gateway_sql_analysis(uuid,uuid,uuid)'::regprocedure,
+          'public.claim_connector_gateway_job(text,text)'::regprocedure,
+          'public.authenticate_connector_gateway_device(text)'::regprocedure,
+          'public.authenticate_connector_gateway_job_result(text,uuid,text)'::regprocedure,
+          'public.finish_connector_gateway_job(uuid,uuid,text,text,text,integer,text,uuid)'::regprocedure
+        ) and has_function_privilege('public', oid, 'execute')) as public_exec,
+        (select count(*)::integer from pg_proc where oid in (
+          'public.create_connector_gateway_enrollment(uuid,text,text,text,timestamptz,uuid)'::regprocedure,
+          'public.begin_connector_gateway_enrollment(text)'::regprocedure,
+          'public.complete_connector_gateway_enrollment(uuid,text,text,uuid,uuid,text,text,text,integer,jsonb)'::regprocedure,
+          'public.fail_connector_gateway_enrollment(uuid,text,text)'::regprocedure,
+          'public.revoke_connector_gateway(uuid,uuid,uuid)'::regprocedure,
+          'public.enqueue_connector_gateway_sql_analysis(uuid,uuid,uuid)'::regprocedure,
+          'public.claim_connector_gateway_job(text,text)'::regprocedure,
+          'public.authenticate_connector_gateway_device(text)'::regprocedure,
+          'public.authenticate_connector_gateway_job_result(text,uuid,text)'::regprocedure,
+          'public.finish_connector_gateway_job(uuid,uuid,text,text,text,integer,text,uuid)'::regprocedure
+        ) and coalesce(proconfig, array[]::text[]) @> array['search_path=""']) as fixed_paths,
+        (select count(*)::integer from pg_constraint
+          where conrelid = 'public.sql_analysis_queries'::regclass
+            and conname = 'sql_analysis_queries_last_run_status_check'
+            and pg_get_constraintdef(oid) like '%queued%') as queued_status
+    `,
+    expected: {
+      ledger: 1,
+      rls_tables: 2,
+      policies: 2,
+      indexes: 6,
+      gateway_table_select: false,
+      gateway_safe_select: true,
+      enrollment_hash_select: false,
+      device_hash_select: false,
+      gateway_insert: false,
+      gateway_update: false,
+      job_table_select: false,
+      job_safe_select: true,
+      lease_hash_select: false,
+      job_insert: false,
+      job_update: false,
+      app_exec: 10,
+      public_exec: 0,
+      fixed_paths: 10,
+      queued_status: 1,
+    },
+  },
 };
+
+// 0044 closes inherited default table grants discovered by the 0043 verifier;
+// all other gateway invariants must remain unchanged.
+verifiers["0044_gateway_least_privilege_correction.sql"] = verifiers["0043_outbound_sql_gateway.sql"];
+verifiers["0045_gateway_completion_authority_hardening.sql"] = verifiers["0043_outbound_sql_gateway.sql"];
+verifiers["0046_gateway_device_authentication.sql"] = verifiers["0043_outbound_sql_gateway.sql"];
+verifiers["0047_gateway_token_column_privacy.sql"] = verifiers["0043_outbound_sql_gateway.sql"];
 
 const verifier = verifiers[expectedMigration];
 if (!verifier) {

@@ -19,10 +19,11 @@ This specification is designed to be handed to an AI software builder, technical
 | Data integration product | Hized Connect |
 | Self-serve dashboard product | Hized Canvas |
 | Go-to-market | Consultancy-led implementation with recurring platform fees |
-| Document status | Build-ready product definition — Version 3.5 |
+| Document status | Build-ready product definition — Version 3.7 |
 
 ### Changes since v1.0
 
+- **Activ8 private SQL topology confirmed.** Activ8's SQL Server runs on a Windows Server reached operationally through Remote Desktop rather than a public database endpoint. Live Hized extraction and SQL visual analysis therefore require an outbound-only Windows gateway before activation: it initiates TLS/HTTPS traffic to Hized, reaches SQL Server locally or over the customer LAN with a dedicated least-privilege identity, and accepts no inbound Hized, SQL or Remote Desktop exposure. Port 1433 must not be opened to the internet for Hized.
 - **Hized Field removed.** Travel/route-optimisation was speculative and not represented anywhere in the go-to-market material; it added scope without a validated buyer.
 - **Hized Canvas added.** The self-serve, build-your-own-dashboard layer on top of Pulse's governed data — already live in the marketing site's four-pillar story (Connect · Pulse · Canvas · Compass) — is now a first-class product in this spec.
 - **Reference architecture updated (section 9.1).** The platform will be built on Next.js with a tenant-isolated Postgres database (Row-Level Security keyed on TenantId), rather than the ASP.NET Core / Azure SQL / Microsoft Entra ID stack originally proposed, to move faster pre-pilot.
@@ -113,7 +114,7 @@ This specification is designed to be handed to an AI software builder, technical
 ### Changes since v2.6
 
 - **An existing customer SQL warehouse is a valid pilot source.** Activ8 may initially supply its Salesforce-derived data through selected read-only SQL Server tables or views. That is a reusable SQL Server adapter path, not an Activ8-specific schema or runtime. Hized's direct Salesforce adapter remains available for reconciliation or later replacement, but one governed dataset must have one declared production source of truth so the same records are not loaded twice.
-- **Hosted database extraction has an explicit network and privilege boundary.** The first SQL Server/Azure SQL runtime accepts only TLS-valid, allowlisted public endpoints and a dedicated read-only SQL login. Hized must reject broad database ownership/write roles and must never advise a customer to expose port 1433 merely to make an on-premises source reachable. Private or VPN-only databases use a later outbound Hized gateway/agent that initiates the connection from the customer network.
+- **Database extraction has an explicit network and privilege boundary.** The hosted SQL Server/Azure SQL runtime accepts only TLS-valid, allowlisted public endpoints and a dedicated read-only SQL login. Hized must reject broad database ownership/write roles and must never advise a customer to expose port 1433 merely to make an on-premises source reachable. Private or VPN-only databases use an outbound Hized gateway/agent that initiates HTTPS from the customer network and applies the same query, row, field, timeout, credential and audit controls. This gateway is required for the Activ8 pilot because its SQL Server is on a Windows Server reached through Remote Desktop.
 - **The first SQL extraction profile is bounded and operationally honest.** Analysts browse permitted tables/views, select scalar fields and configure either a guarded full snapshot or key-based watermark upsert. A manual extract is capped at 100,000 rows and 250 fields; scheduling and the private-network gateway follow through the same pipeline contract. Watermark extraction does not infer hard deletes: use a full snapshot, a governed soft-delete/change-tracking field or scoped Custom ETL when deletion fidelity is required.
 
 ### Changes since v2.7
@@ -156,6 +157,11 @@ This specification is designed to be handed to an AI software builder, technical
 
 - **Canvas creation is independent from the Analyst role.** Every active member can enter Canvas; a Company Admin separately grants Viewer or Creator capability without changing that person's business role or organisation scope. End users, Managers and Executives can therefore build their own boards, while Analysts retain responsibility for source/query preparation and metric governance.
 - **Saved SQL analysis is a governed visual source.** Company Admins and Analysts may author one bounded read-only SQL Server/Azure SQL `SELECT`/CTE against an approved source connection. Results must use Hized's semantic visual-row contract, resolve every row to a current tenant organisation node, and are stored relationally so RLS filters each viewer. Canvas can use a validated scoped analysis; a Pulse view can publish it only after every returned series is certified by a Company Admin into the versioned KPI catalogue.
+
+### Changes since v3.6
+
+- **Private SQL visual analysis uses an outbound Windows gateway.** A Company Admin creates a one-time 15-minute enrolment token; the Windows worker verifies a dedicated read-only SQL identity locally, stores the SQL and device credentials with Windows DPAPI and polls Hized over HTTPS 443. It exposes no inbound listener, receives only tenant-bound leased jobs, revalidates the shared one-`SELECT`/CTE and 5,000-row contract locally, and sends only semantic result rows back into the originating actor's ordinary selected-tenant RLS context.
+- **Gateway authority is independently revocable and observable.** Device tokens are hashed at rest in Hized, idle authenticated polls update a heartbeat, job leases expire and retry with bounded attempts, and revocation invalidates the device and disables its connection. The first protocol carries SQL Visual Studio analysis jobs; scheduled SQL destination delivery and generated stage-five publication over the same gateway remain a later transport extension and must not be represented as implemented.
 
 ## 1. Product definition and positioning
 

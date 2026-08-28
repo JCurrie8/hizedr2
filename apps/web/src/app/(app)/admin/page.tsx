@@ -19,6 +19,12 @@ const settings = [
     allowedRoles: ["company_admin", "analyst"],
   },
   {
+    title: "Private SQL gateways",
+    description: "Enrol and monitor outbound Windows connectivity without exposing SQL Server.",
+    path: "/admin/gateways",
+    adminOnly: true,
+  },
+  {
     title: "Governed datasets",
     description: "Publish Connect output, govern field sensitivity and record drill-through.",
     path: "/admin/datasets",

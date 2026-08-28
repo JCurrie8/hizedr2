@@ -16,7 +16,11 @@ Activ8's existing Salesforce-to-SQL process can remain the initial upstream prod
 
 ### 2.1 Network decision
 
-Confirm whether the SQL Server/Azure SQL endpoint is publicly reachable with a valid TLS certificate or is private/on-premises behind a VPN. Never expose port 1433 solely for Hized. A private endpoint requires the outbound Hized gateway before live activation.
+Confirmed on 2026-08-27: Activ8's SQL Server runs on a Windows Server reached operationally through Remote Desktop. Treat it as private unless Activ8's DBA proves a separate approved public endpoint exists. Never expose port 1433 or provide Hized with Remote Desktop credentials.
+
+Live activation therefore requires the outbound Hized gateway on that server or another Windows host with an approved network path to SQL Server. The release candidate runs as a Windows startup task under SYSTEM, initiates only TLS/HTTPS 443 traffic to Hized, keeps a dedicated read-only SQL credential local using DPAPI plus a SYSTEM/Administrators-only directory, validates the same bounded read-only job contract again before execution, returns only bounded semantic results, exposes no inbound listener, supports revocation and reports a heartbeat. Installation still requires Activ8 IT/DBA approval and a live proof on their server.
+
+The first gateway protocol supports SQL Visual Studio analysis for Canvas/Pulse. It does **not** yet carry the separate SQL Destination loader or generated stage-five publication extracts; those Connect transports must be added to the same leased gateway protocol before sections 2.2/2.3 can run against this private server.
 
 ### 2.2 Stage 1 — schema-scoped SQL Destination loader
 
@@ -40,11 +44,11 @@ grant select, insert, update, delete, alter on schema::[hized_landing] to [hized
 2. Save the read-only connection under **Settings > Connect**, then return to the source pipeline's **Governed Hized publication** stage. Choose that publisher, name the Hized pipeline and select manual or hourly-to-daily refresh. Hized requires the same server/database as the workbench, revalidates the approved table/view and imports its complete supported field contract as a snapshot.
 3. Run **Publish to Hized now**, reconcile extracted/accepted/quarantined counts, then publish that resulting pipeline as the governed dataset used by Pulse and Canvas. A newly approved transformation version requires an explicit new publication binding; the older pipeline is retained but cannot continue once its transformation is superseded.
 
-The hosted publisher executes generated, bounded reads only: up to 100,000 rows and 250 fields per extract. It does not accept arbitrary SQL. Approved stage-five publication initially uses a complete snapshot so the stored Hized result exactly follows the promoted field contract; generic SQL source pipelines can still use a 24-hour-overlap watermark where separately configured. SQL destination delivery and read-only Hized publication each have independent manual/hourly-to-daily schedules and leases. The private-network gateway remains a delivery follow-on.
+The publisher executes generated, bounded reads only: up to 100,000 rows and 250 fields per extract. It does not accept arbitrary SQL. Approved stage-five publication initially uses a complete snapshot so the stored Hized result exactly follows the promoted field contract; generic SQL source pipelines can still use a 24-hour-overlap watermark where separately configured. SQL destination delivery and read-only Hized publication each have independent manual/hourly-to-daily schedules and leases. For Activ8, those SQL operations must travel through the outbound gateway while preserving the same controls and ledgers.
 
 ### 2.4 SQL visual studio for the first Activ8 views
 
-The generated stage-five publisher above remains the repeatable dataset-ingestion path. The separate **Settings > SQL visual studio** is the faster visual-analysis path for building Activ8's first Canvas/Pulse questions against the same approved read-only SQL source:
+The generated stage-five publisher above remains the target repeatable dataset-ingestion path. The separate **Settings > SQL visual studio** is the faster visual-analysis path for building Activ8's first Canvas/Pulse questions against the same approved read-only SQL source. After the gateway release is deployed, a Company Admin enrols it under **Settings > Private SQL gateways** before this flow can reach Activ8's private server:
 
 1. A Company Admin or Analyst selects the Activ8 read-only source connection and enters one `SELECT` or CTE. Hized refuses comments, multiple statements, write/dynamic/external execution verbs, runs for at most 30 seconds and accepts no more than 5,000 semantic result rows.
 2. The query returns `org_code` (or a Hized `org_node_id`), `series_key`, `series_label`, `period_start`, `period_end` and `actual_value`. Optional aliases are `category_label`, `target_value`, `prior_period_value`, `numerator_value`, `denominator_value` and `source_refreshed_at`.
@@ -102,7 +106,8 @@ Before Activ8 data is presented in Pulse or Canvas:
 ## 6. Still required for a dependable live pilot
 
 - Configure and live-test the hourly protected Connect scheduler.
-- If Activ8 SQL is private/on-premises, deploy and verify the outbound Hized gateway; never solve reachability by exposing the database port.
+- Complete protected release of the outbound Windows gateway, install and enrol it with Activ8 IT/DBA approval, then prove a read-only test query and credential revocation; never solve reachability by exposing the database or Remote Desktop ports.
+- Extend the gateway beyond SQL Visual Studio jobs before using it for SQL Destination delivery or generated stage-five Connect publication.
 - Complete Microsoft OAuth activation if Activ8 uses monitored SharePoint/Forms workbooks.
 - Add Bulk API 2.0 before onboarding any Salesforce object whose required bootstrap cannot fit the bounded REST run.
 - Build the operational incident/email delivery slice so failures, stale sources and recovery are proactively sent rather than visible only in Connect.

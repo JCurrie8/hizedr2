@@ -14,6 +14,7 @@ import {
 } from "@/server/domains/analytics/sql-analysis";
 import { executeSqlAnalysisQuery, validateSqlAnalysisText } from "@/server/domains/connectors/sql-server-api";
 import { getSqlServerCredentials } from "@/server/domains/connectors/sql-server-connectors";
+import { enqueueSqlAnalysisGatewayJob } from "@/server/domains/connectors/sql-gateways";
 import { assertProductAccess } from "@/server/domains/products/entitlements";
 import { APP_ROLES } from "@/server/domains/access-control/membership-access";
 import { KPI_AGGREGATIONS, type KpiAggregation } from "@/server/domains/pulse/kpi-governance";
@@ -47,6 +48,24 @@ async function runSavedAnalysis(ctx: Awaited<ReturnType<typeof requireSqlAnalysi
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
     (client) => getSqlAnalysisExecutionContext(client, { tenantId: ctx.tenant.id, queryId }),
   );
+  if (context.transport === "gateway") {
+    await withUserContext({ userId: ctx.profileId, tenantId: ctx.tenant.id }, async (client) => {
+      const jobId = await enqueueSqlAnalysisGatewayJob(client, {
+        tenantId: ctx.tenant.id,
+        queryId,
+        actorUserId: ctx.profileId,
+      });
+      await insertAuditLog(client, {
+        tenantId: ctx.tenant.id,
+        actorUserId: ctx.profileId,
+        action: "analytics.sql_query_queued",
+        targetType: "sql_analysis_query",
+        targetId: queryId,
+        metadata: { connectorId: context.connectorId, gatewayJobId: jobId, queryHash: context.queryHash },
+      });
+    });
+    return;
+  }
   const stored = await withUserContext(
     { userId: ctx.profileId, tenantId: ctx.tenant.id },
     (client) => getSqlServerCredentials(client, { tenantId: ctx.tenant.id, connectorId: context.connectorId }),

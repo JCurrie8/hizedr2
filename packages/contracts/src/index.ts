@@ -16,3 +16,5 @@ export type AppRole =
 
 export * from "./org";
 export * from "./connect";
+export * from "./sql-analysis";
+export * from "./gateway";

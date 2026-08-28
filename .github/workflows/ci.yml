@@ -60,6 +60,14 @@ jobs:
           BETTER_AUTH_SECRET: ci-build-only-secret-at-least-32-characters
           BETTER_AUTH_URL: http://localhost:3000
 
+      - name: Upload the verified Windows gateway bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hized-windows-gateway-${{ github.sha }}
+          path: apps/gateway/dist/**
+          if-no-files-found: error
+          retention-days: 14
+
   database-tests:
     name: Migrations and database integration tests
     needs: quality
