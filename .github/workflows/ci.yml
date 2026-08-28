@@ -61,7 +61,7 @@ jobs:
           BETTER_AUTH_URL: http://localhost:3000
 
       - name: Upload the verified Windows gateway bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hized-windows-gateway-${{ github.sha }}
           path: apps/gateway/dist/**
