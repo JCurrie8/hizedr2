@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import type { AppRole } from "@hized/contracts";
+import type { AppRole, SqlAnalysisExecution, SqlAnalysisSourceRow } from "@hized/contracts";
 import type { PoolClient } from "@neondatabase/serverless";
-import type { SqlAnalysisExecution, SqlAnalysisSourceRow } from "../connectors/sql-server-api";
 import { approveKpiDraft, createKpiDraft, type KpiAggregation } from "../pulse/kpi-governance";
 import type { KpiDirection, KpiUnit } from "../pulse/kpis";
 
@@ -12,7 +11,7 @@ export interface SqlAnalysisSummary {
   name: string;
   description: string;
   status: "draft" | "validated" | "certified" | "retired";
-  lastRunStatus: "succeeded" | "failed" | null;
+  lastRunStatus: "queued" | "succeeded" | "failed" | null;
   lastRunMessage: string | null;
   lastRowCount: number | null;
   lastRunAt: string | null;
@@ -53,15 +52,18 @@ export async function createSqlAnalysisDraft(
 export async function getSqlAnalysisExecutionContext(
   client: PoolClient,
   input: { tenantId: string; queryId: string },
-): Promise<{ connectorId: string; sqlText: string; queryHash: string }> {
+): Promise<{ connectorId: string; sqlText: string; queryHash: string; transport: "hosted" | "gateway" }> {
   const { rows: [row] } = await client.query(
-    `select connector_id, sql_text, query_hash
-       from public.sql_analysis_queries
-      where tenant_id = $1 and id = $2 and status <> 'retired'`,
+    `select query_row.connector_id, query_row.sql_text, query_row.query_hash,
+            case when connector.config ->> 'networkMode' = 'gateway' then 'gateway' else 'hosted' end as transport
+       from public.sql_analysis_queries query_row
+       join public.connectors connector
+         on connector.id = query_row.connector_id and connector.tenant_id = query_row.tenant_id
+      where query_row.tenant_id = $1 and query_row.id = $2 and query_row.status <> 'retired'`,
     [input.tenantId, input.queryId],
   );
   if (!row) throw new Error("The SQL analysis was not found.");
-  return { connectorId: row.connector_id, sqlText: row.sql_text, queryHash: row.query_hash };
+  return { connectorId: row.connector_id, sqlText: row.sql_text, queryHash: row.query_hash, transport: row.transport };
 }
 
 interface ResolvedAnalysisRow extends SqlAnalysisSourceRow { orgNodeId: string; categoryLabel: string }

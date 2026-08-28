@@ -1,0 +1,22 @@
+{
+  "name": "@hized/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist -m --license licenses.txt && node scripts/copy-assets.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hized/contracts": "workspace:*",
+    "mssql": "12.7.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/mssql": "12.3.0",
+    "@types/node": "^20",
+    "@vercel/ncc": "^0.38.3",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
