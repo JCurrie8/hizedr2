@@ -23,6 +23,8 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - Marketing site → Vercel project `hized` → `hized.com` / `www.hized.com` (live and separate from this repo). Marketing PR #1 aligned the final-product story to blueprint v2.2, added the `hized.app` client entry and SEO discovery routes, and deployed as commit `b599b80` on 2026-08-03. The user confirmed on 2026-08-03 that no domain currently has email forwarding or mail-specific DNS records configured; do not assume MX/SPF/DKIM exists.
 - This platform app → Vercel project `hized-platform`, git-linked to this repo. The canonical production domain is `hized.app`, with tenant apps on `*.hized.app`; the user moved the domain to Vercel nameservers on 2026-08-03. Production must use `BETTER_AUTH_URL=https://hized.app`, `COOKIE_DOMAIN=.hized.app`, and the `https://hized.app/api/connect/microsoft/callback` OAuth redirect. The legacy `hized-platform.vercel.app` URL remains a preview/fallback route; `MIGRATIONS_DATABASE_URL` is intentionally not in Vercel.
 
+**Marketing editorial rule**: `hized-web` and its interactive demo are public customer experiences. Copy must lead with customer problems, outcomes, confidence and next action; do not use internal validation language such as “what this demo proves”, acceptance-test framing, implementation status or engineering handoff language. Platform governance and security controls should be expressed as customer benefits unless technical detail is necessary to explain a trust or operating-model decision. This rule is also recorded in `hized-web/AGENTS.md` for future contributors.
+
 **Phase 0 (product foundation) progress** — blueprint section 11.4, this repo's own build sequence:
 
 - [x] Repo scaffold, Hized design tokens ported into Tailwind
@@ -68,6 +70,12 @@ Shared status file for AI coding agents (Claude Code, Codex, etc.) working on th
 - Migration `0027` records a separate intra-tenant privacy correction caught before the visual release: KPI-governor authority initially made every private Canvas board readable/editable to Company Admins and Analysts. Canvas privacy is now ownership/explicit-grant based; KPI-governor access applies automatically only to Pulse. The live restricted-role test proves a Company Admin cannot open another member's private board.
 
 ## Session Log
+
+### 2026-08-29 — Codex (customer-facing marketing copy audit and release)
+
+The user corrected an editorial framing error in the newly released marketing demo: “What this demo proves” treated a public customer journey like an internal validation artefact. Replaced that section with customer-facing confidence and outcome language, then audited every customer-visible string across the homepage, metadata and the demo's Home, Pulse, Canvas, Connect and Settings surfaces. Reframed remaining internal architecture and implementation language around customer outcomes, access confidence, data trust and expert support while retaining technical detail only where it explains a security, lineage or operating-model decision.
+
+Recorded the durable rule in both Current State and `hized-web/AGENTS.md`: the website and demo speak to prospective customers, not engineers or reviewers; internal proof, acceptance, build-status and implementation-status language does not belong in public copy. The Next.js production build passed. Rendered desktop and 390px mobile checks covered every route and demo surface with no console errors, framework overlay, horizontal overflow or remaining internal-validation phrases. Marketing commit `1595435` was pushed to `main`; Vercel production deployment `dpl_HSMnWomVosPMgT7DhBYK8KTYNLXf` reached READY and is aliased to `hized.com` / `www.hized.com`. Live checks returned `200` for `/` and `/demo`, confirmed the new copy and absence of the old phrase, and found no production error logs.
 
 ### 2026-08-29 — Codex (marketing demo expanded across the current platform)
 
